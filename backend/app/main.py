@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+from fastapi.openapi.utils import get_openapi
 from sqlalchemy.orm import Session
 from datetime import timedelta
 from . import schemas, auth
@@ -13,7 +15,9 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="诗词接龙游戏API",
     description="诗词接龙游戏的后端API服务",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url=None,  # 禁用默认的 docs
+    redoc_url=None  # 禁用默认的 redoc
 )
 
 # 配置CORS
@@ -25,6 +29,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 自定义 OpenAPI 文档
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    openapi_schema = get_openapi(
+        title="诗词接龙游戏API",
+        version="1.0.0",
+        description="诗词接龙游戏的后端API服务",
+        routes=app.routes,
+    )
+    
+    # 添加安全模式
+    openapi_schema["components"]["securitySchemes"] = {
+        "Bearer": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+        }
+    }
+    openapi_schema["security"] = [{"Bearer": []}]
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+
+# 自定义文档路由
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="诗词接龙游戏API - Swagger UI",
+        swagger_js_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.9.0/swagger-ui-bundle.js",
+        swagger_css_url="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.9.0/swagger-ui.css",
+    )
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_html():
+    return get_redoc_html(
+        openapi_url="/openapi.json",
+        title="诗词接龙游戏API - ReDoc",
+        redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js",
+    )
+
+@app.get("/openapi.json", include_in_schema=False)
+async def get_openapi_endpoint():
+    return app.openapi()
+
 # 根路由
 @app.get("/")
 async def root():
@@ -33,6 +86,7 @@ async def root():
         "docs_url": "/docs",
         "redoc_url": "/redoc"
     }
+
 
 # API 健康检查
 @app.get("/health")
