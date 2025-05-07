@@ -14,13 +14,13 @@ class Settings(BaseSettings):
     MYSQL_PASSWORD: str = "1106"
     MYSQL_DB: str = "poetry_battle"
     
-    # JWT 配置
-    SECRET_KEY: str = "your-secret-key-here"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+ # 可选的完整数据库 URL
+    DATABASE_URL: Optional[str] = None
 
     @property
     def get_database_url(self) -> str:
+        if self.DATABASE_URL:
+            return self.DATABASE_URL
         return (
             f"mysql+pymysql://{self.MYSQL_USER}:"
             f"{self.MYSQL_PASSWORD}@{self.MYSQL_HOST}:"
@@ -31,5 +31,7 @@ class Settings(BaseSettings):
         case_sensitive = True
         env_file = ".env"
         env_file_encoding = 'utf-8'
+         # 允许额外字段
+        extra = "allow"
 
 settings = Settings()

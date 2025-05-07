@@ -3,10 +3,12 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import timedelta
-from . import models, schemas, auth
-from .database import engine, get_db
+from . import schemas, auth
+from .models import Base  # 修改这里
+from .core.database import engine, get_db
 
-models.Base.metadata.create_all(bind=engine)
+# 创建数据库表
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="诗词接龙游戏API")
 
