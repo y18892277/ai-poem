@@ -1,16 +1,18 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
-from fastapi.openapi.utils import get_openapi
 from sqlalchemy.orm import Session
 from datetime import timedelta
 from . import schemas, auth
-from .models import Base, User
+from .models import Base, User, Battle, Season  # 添加所有需要的模型
 from .core.database import engine, get_db
+import logging
 
 # 创建数据库表
 Base.metadata.create_all(bind=engine)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="诗词接龙游戏API",
@@ -99,25 +101,35 @@ async def health_check():
 # 用户注册
 @app.post("/api/v1/register", response_model=schemas.User)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.username == user.username).first()
-    if db_user:
-        raise HTTPException(status_code=400, detail="用户名已存在")
-    
-    db_user = db.query(User).filter(User.email == user.email).first()
-    if db_user:
-        raise HTTPException(status_code=400, detail="邮箱已被注册")
-    
-    hashed_password = auth.get_password_hash(user.password)
-    db_user = User(
-        username=user.username,
-        email=user.email,
-        hashed_password=hashed_password,
-        nickname=user.nickname or user.username
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+    try:
+        logger.info(f"Attempting to register user: {user.username}")
+        db_user = db.query(User).filter(User.username == user.username).first()
+        if db_user:
+            logger.warning(f"Username already exists: {user.username}")
+            raise HTTPException(status_code=400, detail="用户名已存在")
+        
+        db_user = db.query(User).filter(User.email == user.email).first()
+        if db_user:
+            logger.warning(f"Email already registered: {user.email}")
+            raise HTTPException(status_code=400, detail="邮箱已被注册")
+        
+        hashed_password = auth.get_password_hash(user.password)
+        db_user = User(
+            username=user.username,
+            email=user.email,
+            hashed_password=hashed_password,
+            nickname=user.nickname or user.username,
+            is_active=True,  # 设置默认值
+            avatar=None  # 设置默认值
+        )
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        logger.info(f"Successfully registered user: {user.username}")
+        return db_user
+    except Exception as e:
+        logger.error(f"Error during registration: {str(e)}")
+        raise
 
 # 用户登录
 @app.post("/api/v1/token", response_model=schemas.Token)
