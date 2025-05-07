@@ -1,34 +1,39 @@
 from pydantic import BaseSettings
 from typing import Optional
-import secrets
+import os
+from dotenv import load_dotenv
+
+# 确保加载 .env 文件
+load_dotenv()
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "诗词接龙擂台赛"
-    VERSION: str = "1.0.0"
-    API_V1_STR: str = "/api/v1"
-    
-    # JWT设置
-    SECRET_KEY: str = secrets.token_urlsafe(32)
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
-    
-    # 数据库设置
+    # MySQL 配置
     MYSQL_HOST: str = "localhost"
     MYSQL_PORT: str = "3306"
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = "password"
+    MYSQL_PASSWORD: str = "1106"
     MYSQL_DB: str = "poetry_battle"
     
-    # 数据库URL
+    # 可选的完整数据库 URL
     SQLALCHEMY_DATABASE_URL: Optional[str] = None
-    
+
     @property
     def get_database_url(self) -> str:
         if self.SQLALCHEMY_DATABASE_URL:
             return self.SQLALCHEMY_DATABASE_URL
-        return f"mysql+pymysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DB}"
+        return (
+            f"mysql+pymysql://{self.MYSQL_USER}:"
+            f"{self.MYSQL_PASSWORD}@{self.MYSQL_HOST}:"
+            f"{self.MYSQL_PORT}/{self.MYSQL_DB}"
+        )
 
     class Config:
         case_sensitive = True
         env_file = ".env"
+        env_file_encoding = 'utf-8'
 
-settings = Settings() 
+settings = Settings()
+
+# 在 Python 交互式环境中测试
+from app.core.config import settings
+print(settings.get_database_url)
