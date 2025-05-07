@@ -2,17 +2,19 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import create_engine
-from app.core.config import settings
+from app.core.database import engine
 from app.models.base import Base
 from app.models.user import User
-from app.models.poetry import Poetry, Battle, Season
+from app.models.poetry import Poetry, Battle
 
 def init_db():
-    engine = create_engine(settings.get_database_url)
-    Base.metadata.create_all(bind=engine)
+    try:
+        # 创建所有表
+        Base.metadata.create_all(bind=engine)
+        print("数据库表创建成功！")
+    except Exception as e:
+        print(f"数据库表创建失败：{str(e)}")
+        raise
 
 if __name__ == "__main__":
-    print("Creating initial data")
     init_db()
-    print("Initial data created") 

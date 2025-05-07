@@ -1,4 +1,4 @@
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 from typing import Optional
 import os
 from dotenv import load_dotenv
@@ -14,13 +14,13 @@ class Settings(BaseSettings):
     MYSQL_PASSWORD: str = "1106"
     MYSQL_DB: str = "poetry_battle"
     
-    # 可选的完整数据库 URL
-    SQLALCHEMY_DATABASE_URL: Optional[str] = None
+    # JWT 配置
+    SECRET_KEY: str = "your-secret-key-here"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     @property
     def get_database_url(self) -> str:
-        if self.SQLALCHEMY_DATABASE_URL:
-            return self.SQLALCHEMY_DATABASE_URL
         return (
             f"mysql+pymysql://{self.MYSQL_USER}:"
             f"{self.MYSQL_PASSWORD}@{self.MYSQL_HOST}:"
@@ -33,7 +33,3 @@ class Settings(BaseSettings):
         env_file_encoding = 'utf-8'
 
 settings = Settings()
-
-# 在 Python 交互式环境中测试
-from app.core.config import settings
-print(settings.get_database_url)
