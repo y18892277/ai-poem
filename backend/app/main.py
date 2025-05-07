@@ -4,13 +4,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import timedelta
 from . import schemas, auth
-from .models import Base, User  # 修改这里，添加 User 的导入
+from .models import Base, User
 from .core.database import engine, get_db
 
 # 创建数据库表
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="诗词接龙游戏API")
+app = FastAPI(
+    title="诗词接龙游戏API",
+    description="诗词接龙游戏的后端API服务",
+    version="1.0.0"
+)
 
 # 配置CORS
 app.add_middleware(
@@ -21,18 +25,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 根路由
+@app.get("/")
+async def root():
+    return {
+        "message": "欢迎使用诗词接龙游戏API",
+        "docs_url": "/docs",
+        "redoc_url": "/redoc"
+    }
+
+# API 健康检查
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "version": "1.0.0"
+    }
+
+# 用户注册
 @app.post("/api/v1/register", response_model=schemas.User)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.username == user.username).first()  # 修改这里
+    db_user = db.query(User).filter(User.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="用户名已存在")
     
-    db_user = db.query(User).filter(User.email == user.email).first()  # 修改这里
+    db_user = db.query(User).filter(User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="邮箱已被注册")
     
     hashed_password = auth.get_password_hash(user.password)
-    db_user = User(  # 修改这里
+    db_user = User(
         username=user.username,
         email=user.email,
         hashed_password=hashed_password,
@@ -43,9 +65,10 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.refresh(db_user)
     return db_user
 
+# 用户登录
 @app.post("/api/v1/token", response_model=schemas.Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == form_data.username).first()  # 修改这里
+    user = db.query(User).filter(User.username == form_data.username).first()
     if not user or not auth.verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -59,14 +82,16 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
+# 获取当前用户信息
 @app.get("/api/v1/users/me", response_model=schemas.User)
-async def read_users_me(current_user: User = Depends(auth.get_current_user)):  # 修改这里
+async def read_users_me(current_user: User = Depends(auth.get_current_user)):
     return current_user
 
+# 更新用户信息
 @app.put("/api/v1/users/me", response_model=schemas.User)
 async def update_user(
     user_update: schemas.UserUpdate,
-    current_user: User = Depends(auth.get_current_user),  # 修改这里
+    current_user: User = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     if user_update.nickname:
