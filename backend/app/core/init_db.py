@@ -6,16 +6,18 @@ from ..models import Season
 
 def init_poetry_data(db: Session):
     """初始化诗词数据"""
+    # 检查是否已有数据
     if db.query(Poetry).first():
         return
     
+    # 示例诗词数据
     poetry_data = [
         {
             "title": "静夜思",
             "author": "李白",
             "dynasty": "唐",
             "content": "床前明月光，疑是地上霜。举头望明月，低头思故乡。",
-            "type": "诗",
+            "type": "五言绝句",
             "tags": "思乡,月亮",
             "difficulty": 1
         },
@@ -24,8 +26,8 @@ def init_poetry_data(db: Session):
             "author": "孟浩然",
             "dynasty": "唐",
             "content": "春眠不觉晓，处处闻啼鸟。夜来风雨声，花落知多少。",
-            "type": "诗",
-            "tags": "春天,自然",
+            "type": "五言绝句",
+            "tags": "春天,清晨",
             "difficulty": 1
         },
         {
@@ -33,7 +35,7 @@ def init_poetry_data(db: Session):
             "author": "王之涣",
             "dynasty": "唐",
             "content": "白日依山尽，黄河入海流。欲穷千里目，更上一层楼。",
-            "type": "诗",
+            "type": "五言绝句",
             "tags": "登高,壮志",
             "difficulty": 1
         },
@@ -102,10 +104,9 @@ def init_poetry_data(db: Session):
         }
     ]
     
-    for data in poetry_data:
-        poetry = Poetry(**data)
-        db.add(poetry)
-    
+    # 批量插入数据
+    poetry_objects = [Poetry(**data) for data in poetry_data]
+    db.add_all(poetry_objects)
     db.commit()
 
 def init_season_data(db: Session):

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, desc
 from datetime import timedelta
@@ -9,22 +10,33 @@ from fastapi.openapi.utils import get_openapi
 from typing import List, Optional
 import logging
 
-from .core.database import engine, get_db
+from .core.database import engine, get_db, Base
+from .core.init_database import init_database
 from . import schemas, auth
-from .models import Base, User, Battle, Season, Poetry, UserFavoritePoetry
+from .models import User, Battle, Season, Poetry, UserFavoritePoetry
 from .core.init_db import init_poetry_data, init_season_data
 import random
 
-# 删除并重新创建数据库表（仅在开发环境使用）
-Base.metadata.drop_all(bind=engine)
-Base.metadata.create_all(bind=engine)
-
+# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 在创建数据库表后初始化数据
-init_poetry_data(next(get_db()))
-init_season_data(next(get_db()))
+try:
+    # 初始化数据库
+    init_database()
+    
+    # 创建所有表
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables created successfully")
+    
+    # 初始化数据
+    db = next(get_db())
+    init_poetry_data(db)
+    init_season_data(db)
+    logger.info("Initial data loaded successfully")
+except Exception as e:
+    logger.error(f"Error during initialization: {str(e)}")
+    raise
 
 app = FastAPI(
     title="诗词接龙游戏API",
