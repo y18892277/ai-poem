@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 import router from '@/router'
 
 const service = axios.create({
-  baseURL: 'http://localhost:8000',  // 修改为实际的后端地址
+  baseURL: 'http://localhost:8000',
   timeout: 5000,
   headers: {
     'Content-Type': 'application/json'

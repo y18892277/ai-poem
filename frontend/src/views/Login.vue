@@ -173,13 +173,27 @@ const handleSubmit = async () => {
       localStorage.setItem('userInfo', JSON.stringify(userData))
       
       ElMessage.success('登录成功')
-      router.push('/')
+      router.push('/')  // 确保这里使用 router.push
     } else {
       // 注册逻辑
       const { confirmPassword, ...registerData } = form
-      await userStore.register(registerData)
+      const response = await fetch('http://localhost:8000/api/v1/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(registerData)
+      })
+
+      if (!response.ok) {
+        const err = await response.json()
+        throw new Error(err.detail || '注册失败')
+      }
+
       ElMessage.success('注册成功，请登录')
       isLogin.value = true
+      form.password = ''
+      form.confirmPassword = ''
     }
   } catch (error) {
     console.error('Operation failed:', error)

@@ -18,8 +18,9 @@ const router = createRouter({
     },
     {
       path: '/register',
-      name: 'register',
-      component: () => import('@/views/Register.vue')
+      name: 'Register',
+      component: () => import('@/views/Register.vue'),
+      meta: { requiresAuth: false }
     },
     {
       path: '/battle',
@@ -46,16 +47,22 @@ const router = createRouter({
   ]
 })
 
+// 全局前置守卫
 router.beforeEach((to, from, next) => {
   const userStore = useUserStore()
+  const token = localStorage.getItem('token')
   
-  if (to.meta.requiresAuth && !userStore.token) {
+  // 如果需要登录且没有token
+  if (to.meta.requiresAuth && !token) {
     next('/login')
-  } else if (to.path === '/login' && userStore.token) {
+  }
+  // 如果已登录且访问登录/注册页
+  else if (token && (to.path === '/login' || to.path === '/register')) {
     next('/')
-  } else {
+  }
+  else {
     next()
   }
 })
 
-export default router 
+export default router

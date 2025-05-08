@@ -2,6 +2,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import axios from '@/utils/axios'
+import router from '@/router'
 
 export const useUserStore = defineStore('user', () => {
   const token = ref(localStorage.getItem('token') || '')
@@ -34,9 +35,20 @@ export const useUserStore = defineStore('user', () => {
       const userResponse = await axios.get('/api/v1/users/me')
       setUserInfo(userResponse.data)
       
+      router.push('/')  // 登录成功后跳转到首页
       return true
     } catch (error) {
       console.error('Login failed:', error)
+      throw error
+    }
+  }
+
+  const register = async (userData) => {
+    try {
+      const response = await axios.post('/api/v1/register', userData)
+      return response.data
+    } catch (error) {
+      console.error('Registration failed:', error)
       throw error
     }
   }
@@ -47,6 +59,7 @@ export const useUserStore = defineStore('user', () => {
     localStorage.removeItem('token')
     localStorage.removeItem('userInfo')
     delete axios.defaults.headers.common['Authorization']
+    router.push('/login')  // 退出后跳转到登录页
   }
 
   return {
@@ -55,6 +68,7 @@ export const useUserStore = defineStore('user', () => {
     isLoggedIn,
     username,
     login,
+    register,
     logout
   }
 })

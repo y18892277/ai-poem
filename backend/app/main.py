@@ -103,6 +103,41 @@ async def health_check():
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     try:
         logger.info(f"Attempting to register user: {user.username}")
+        
+        # 检查用户名是否已存在
+        db_user = db.query(User).filter(User.username == user.username).first()
+        if db_user:
+            logger.warning(f"Username already exists: {user.username}")
+            raise HTTPException(status_code=400, detail="用户名已存在")
+        
+        # 检查邮箱是否已注册
+        db_user = db.query(User).filter(User.email == user.email).first()
+        if db_user:
+            logger.warning(f"Email already registered: {user.email}")
+            raise HTTPException(status_code=400, detail="邮箱已被注册")
+        
+        # 创建新用户
+        hashed_password = auth.get_password_hash(user.password)
+        db_user = User(
+            username=user.username,
+            email=user.email,
+            hashed_password=hashed_password,
+            nickname=user.nickname or user.username,
+            is_active=True,
+            avatar=None
+        )
+        
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        
+        logger.info(f"Successfully registered user: {user.username}")
+        return db_user
+    except Exception as e:
+        logger.error(f"Error during registration: {str(e)}")
+        raise
+    try:
+        logger.info(f"Attempting to register user: {user.username}")
         db_user = db.query(User).filter(User.username == user.username).first()
         if db_user:
             logger.warning(f"Username already exists: {user.username}")
