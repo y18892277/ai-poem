@@ -72,8 +72,13 @@
             <p class="author">作者：{{ poetry.author }} · {{ poetry.dynasty }}</p>
             <p class="content">{{ poetry.content }}</p>
             <div class="tags">
-              <el-tag v-for="tag in poetry.tags" :key="tag" size="small">
-                {{ tag }}
+              <el-tag
+                v-for="tag in poetry.tags ? poetry.tags.split(',') : []"
+                :key="tag"
+                size="small"
+                class="tag"
+              >
+                {{ tag.trim() }}
               </el-tag>
             </div>
           </div>
@@ -184,10 +189,13 @@ onMounted(async () => {
 <style scoped>
 .poetry-library {
   padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
 .search-card {
   margin-bottom: 20px;
+  border-radius: 8px;
 }
 
 .search-header {
@@ -199,7 +207,8 @@ onMounted(async () => {
 
 .search-container {
   display: flex;
-  gap: 10px;
+  gap: 16px;
+  align-items: center;
 }
 
 .search-input {
@@ -207,20 +216,15 @@ onMounted(async () => {
 }
 
 .poetry-list {
-  min-height: 500px;
+  border-radius: 8px;
 }
 
 .poetry-item {
+  padding: 20px;
+  border-bottom: 1px solid #eee;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  padding: 20px;
-  border-bottom: 1px solid #eee;
-  transition: all 0.3s ease;
-}
-
-.poetry-item:hover {
-  background-color: #f5f7fa;
 }
 
 .poetry-item:last-child {
@@ -232,28 +236,33 @@ onMounted(async () => {
 }
 
 .poetry-content h3 {
-  margin: 0 0 10px;
-  color: #303133;
+  margin: 0 0 8px;
+  font-size: 18px;
+  color: #333;
 }
 
 .author {
-  color: #909399;
-  margin: 5px 0;
+  margin: 0 0 12px;
+  color: #666;
+  font-size: 14px;
 }
 
 .content {
-  color: #606266;
-  margin: 10px 0;
+  margin: 0 0 16px;
+  color: #333;
   line-height: 1.6;
   white-space: pre-wrap;
 }
 
 .tags {
-  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.tags .el-tag {
+.tag {
   margin-right: 8px;
+  margin-bottom: 8px;
 }
 
 .poetry-actions {
@@ -262,6 +271,7 @@ onMounted(async () => {
 
 .pagination {
   margin-top: 20px;
-  text-align: center;
+  display: flex;
+  justify-content: center;
 }
 </style> 

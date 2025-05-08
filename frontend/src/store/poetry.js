@@ -45,19 +45,33 @@ export const usePoetryStore = defineStore('poetry', () => {
   })
 
   // 获取诗词列表
-  const fetchPoetryList = async (page = 1, limit = 10) => {
+  const fetchPoetryList = async (page = 1, pageSize = 10) => {
     try {
       loading.value = true
-      const response = await fetch(`/api/v1/poetry/list?page=${page}&limit=${limit}`)
-      if (!response.ok) throw new Error('获取诗词列表失败')
+      const response = await fetch(`/v1/poetry/list?page=${page}&pageSize=${pageSize}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || '获取诗词列表失败')
+      }
+      
       const data = await response.json()
-      poetryList.value = data.items
-      totalPages.value = data.total_pages
-      currentPage.value = page
+      if (data.success) {
+        poetryList.value = data.data
+        totalPages.value = Math.ceil(data.total / pageSize)
+        currentPage.value = page
+      } else {
+        throw new Error(data.message || '获取诗词列表失败')
+      }
       return data
     } catch (error) {
       console.error('Failed to fetch poetry list:', error)
-      ElMessage.error('获取诗词列表失败')
+      ElMessage.error(error.message || '获取诗词列表失败')
       throw error
     } finally {
       loading.value = false
@@ -69,14 +83,30 @@ export const usePoetryStore = defineStore('poetry', () => {
     try {
       loading.value = true
       searchQuery.value = query
-      const response = await fetch(`/api/v1/poetry/search?q=${encodeURIComponent(query)}`)
-      if (!response.ok) throw new Error('搜索诗词失败')
+      const response = await fetch(`/v1/poetry/list?keyword=${encodeURIComponent(query)}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || '搜索诗词失败')
+      }
+      
       const data = await response.json()
-      poetryList.value = data
+      if (data.success) {
+        poetryList.value = data.data
+        totalPages.value = Math.ceil(data.total / 10)
+        currentPage.value = 1
+      } else {
+        throw new Error(data.message || '搜索诗词失败')
+      }
       return data
     } catch (error) {
       console.error('Failed to search poetry:', error)
-      ElMessage.error('搜索诗词失败')
+      ElMessage.error(error.message || '搜索诗词失败')
       throw error
     } finally {
       loading.value = false
@@ -90,19 +120,34 @@ export const usePoetryStore = defineStore('poetry', () => {
       searchFilters.value = filters
       const queryParams = new URLSearchParams()
       
-      if (filters.keyword) queryParams.append('q', filters.keyword)
+      if (filters.keyword) queryParams.append('keyword', filters.keyword)
       if (filters.dynasty) queryParams.append('dynasty', filters.dynasty)
       if (filters.type) queryParams.append('type', filters.type)
-      if (filters.wordCount) queryParams.append('word_count', filters.wordCount)
       
-      const response = await fetch(`/api/v1/poetry/advanced-search?${queryParams}`)
-      if (!response.ok) throw new Error('高级搜索失败')
+      const response = await fetch(`/v1/poetry/list?${queryParams}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || '高级搜索失败')
+      }
+      
       const data = await response.json()
-      poetryList.value = data
+      if (data.success) {
+        poetryList.value = data.data
+        totalPages.value = Math.ceil(data.total / 10)
+        currentPage.value = 1
+      } else {
+        throw new Error(data.message || '高级搜索失败')
+      }
       return data
     } catch (error) {
       console.error('Failed to perform advanced search:', error)
-      ElMessage.error('高级搜索失败')
+      ElMessage.error(error.message || '高级搜索失败')
       throw error
     } finally {
       loading.value = false
@@ -113,10 +158,14 @@ export const usePoetryStore = defineStore('poetry', () => {
   const fetchFavorites = async () => {
     try {
       loading.value = true
-      const response = await fetch('/api/v1/poetry/favorites')
+      const response = await fetch('/v1/poetry/favorites')
       if (!response.ok) throw new Error('获取收藏列表失败')
       const data = await response.json()
-      favorites.value = data
+      if (data.success) {
+        favorites.value = data.data
+      } else {
+        throw new Error(data.message || '获取收藏列表失败')
+      }
       return data
     } catch (error) {
       console.error('Failed to fetch favorites:', error)
@@ -130,13 +179,18 @@ export const usePoetryStore = defineStore('poetry', () => {
   // 添加收藏
   const addFavorite = async (poetryId) => {
     try {
-      const response = await fetch(`/api/v1/poetry/favorites/${poetryId}`, {
+      const response = await fetch(`/v1/poetry/${poetryId}/favorite`, {
         method: 'POST'
       })
       if (!response.ok) throw new Error('添加收藏失败')
-      await fetchFavorites()
-      ElMessage.success('添加收藏成功')
-      return true
+      const data = await response.json()
+      if (data.success) {
+        await fetchFavorites()
+        ElMessage.success('添加收藏成功')
+        return true
+      } else {
+        throw new Error(data.message || '添加收藏失败')
+      }
     } catch (error) {
       console.error('Failed to add favorite:', error)
       ElMessage.error('添加收藏失败')
@@ -147,13 +201,18 @@ export const usePoetryStore = defineStore('poetry', () => {
   // 取消收藏
   const removeFavorite = async (poetryId) => {
     try {
-      const response = await fetch(`/api/v1/poetry/favorites/${poetryId}`, {
-        method: 'DELETE'
+      const response = await fetch(`/v1/poetry/${poetryId}/favorite`, {
+        method: 'POST'
       })
       if (!response.ok) throw new Error('取消收藏失败')
-      await fetchFavorites()
-      ElMessage.success('取消收藏成功')
-      return true
+      const data = await response.json()
+      if (data.success) {
+        await fetchFavorites()
+        ElMessage.success('取消收藏成功')
+        return true
+      } else {
+        throw new Error(data.message || '取消收藏失败')
+      }
     } catch (error) {
       console.error('Failed to remove favorite:', error)
       ElMessage.error('取消收藏失败')

@@ -114,15 +114,11 @@ const total = ref(0)
 const fetchRankings = async () => {
   try {
     loading.value = true
-    // TODO: 替换为实际的API调用
-    const response = await fetch(`/api/rankings?season=${selectedSeason.value}&page=${currentPage.value}&pageSize=${pageSize.value}`)
+    const response = await fetch(`/api/v1/rankings?season=${selectedSeason.value}&page=${currentPage.value}&pageSize=${pageSize.value}`)
     const data = await response.json()
     
     if (data.success) {
-      rankings.value = data.rankings.map(user => ({
-        ...user,
-        winRate: user.totalBattles ? Math.round((user.winCount / user.totalBattles) * 100) : 0
-      }))
+      rankings.value = data.rankings
       total.value = data.total
     } else {
       ElMessage.error('获取排行榜数据失败')
@@ -138,12 +134,11 @@ const fetchRankings = async () => {
 // 获取赛季列表
 const fetchSeasons = async () => {
   try {
-    // TODO: 替换为实际的API调用
-    const response = await fetch('/api/seasons')
+    const response = await fetch('/api/v1/seasons')
     const data = await response.json()
     
     if (data.success) {
-      seasons.value = data.seasons
+      seasons.value = data
       if (seasons.value.length > 0) {
         selectedSeason.value = seasons.value[0].id
         fetchRankings()

@@ -25,6 +25,31 @@ class Poetry(PoetryBase):
     class Config:
         from_attributes = True
 
+class PoetryResponse(BaseModel):
+    success: bool
+    message: Optional[str] = None
+    data: Optional[Poetry] = None
+
+    class Config:
+        from_attributes = True
+
+class PoetryListResponse(BaseModel):
+    success: bool
+    data: List[Poetry]
+    total: int
+    page: int
+    pageSize: int
+
+    class Config:
+        from_attributes = True
+
+class PoetryFavoriteResponse(BaseModel):
+    success: bool
+    message: str
+
+    class Config:
+        from_attributes = True
+
 class PoetryChain(BaseModel):
     poetry1: str  # 前一句诗词
     poetry2: str  # 接龙的诗词
