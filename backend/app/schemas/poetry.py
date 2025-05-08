@@ -1,11 +1,14 @@
 from pydantic import BaseModel
 from typing import Optional, List
+from datetime import datetime
 
 class PoetryBase(BaseModel):
+    title: str
+    author: str
+    dynasty: str
     content: str
-    author: Optional[str] = None
-    dynasty: Optional[str] = None
-    title: Optional[str] = None
+    type: Optional[str] = None
+    tags: Optional[str] = None
     difficulty: Optional[int] = 1
 
 class PoetryCreate(PoetryBase):
@@ -14,14 +17,21 @@ class PoetryCreate(PoetryBase):
 class PoetryUpdate(PoetryBase):
     pass
 
-class PoetryInDBBase(PoetryBase):
+class Poetry(PoetryBase):
     id: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
-class Poetry(PoetryInDBBase):
-    pass
+class PoetryChain(BaseModel):
+    poetry1: str  # 前一句诗词
+    poetry2: str  # 接龙的诗词
+    chain_type: Optional[str] = None  # 接龙类型（如：首尾字接龙、意境接龙等）
+
+    class Config:
+        from_attributes = True
 
 class BattleBase(BaseModel):
     user_id: int

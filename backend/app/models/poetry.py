@@ -3,16 +3,14 @@ from sqlalchemy.orm import relationship
 from .base import BaseModel
 
 class Poetry(BaseModel):
-    __tablename__ = "poetries"
+    __tablename__ = "poetry"
     
-    content = Column(String(500), nullable=False)
-    author = Column(String(50))
-    dynasty = Column(String(50))
-    title = Column(String(100))
-    difficulty = Column(Integer, default=1)  # 1-5级难度
-    
-    def __repr__(self):
-        return f"<Poetry {self.title}>"
+    title = Column(String(100), nullable=False)
+    author = Column(String(50), nullable=False)
+    dynasty = Column(String(20), nullable=False)
+    content = Column(String(1000), nullable=False)
+    type = Column(String(20))  # 诗、词、曲等
+    tags = Column(String(200))  # 标签，用逗号分隔
 
 class Battle(BaseModel):
     __tablename__ = "battles"
@@ -40,3 +38,6 @@ class Season(BaseModel):
     
     def __repr__(self):
         return f"<Season {self.name}>" 
+    
+
+

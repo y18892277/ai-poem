@@ -1,10 +1,12 @@
 from sqlalchemy import Column, String, Integer, Float, Boolean
 from sqlalchemy.orm import relationship
-from .base import BaseModel
+from .base import Base
 
-class User(BaseModel):
+class User(Base):
     __tablename__ = "users"
     
+    # 添加主键
+    id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
     email = Column(String(100), unique=True, index=True, nullable=False)
     hashed_password = Column(String(100), nullable=False)

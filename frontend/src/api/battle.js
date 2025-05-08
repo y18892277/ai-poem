@@ -1,3 +1,4 @@
+// frontend/src/api/battle.js
 import request from '@/utils/request'
 
 export function getRandomPoetry(difficulty = 1) {
@@ -18,14 +19,14 @@ export function checkPoetryChain(poetry1, poetry2) {
 
 export function createBattle() {
   return request({
-    url: '/api/v1/battle/battle',
+    url: '/api/v1/battle/create',  // 修改为正确的API路径
     method: 'post'
   })
 }
 
 export function updateBattle(battleId, data) {
   return request({
-    url: `/api/v1/battle/battle/${battleId}`,
+    url: `/api/v1/battle/${battleId}`,  // 修改为正确的API路径
     method: 'put',
     data
   })
@@ -37,4 +38,4 @@ export function getSeasonRankings(seasonId, limit = 10) {
     method: 'get',
     params: { season_id: seasonId, limit }
   })
-} 
+}

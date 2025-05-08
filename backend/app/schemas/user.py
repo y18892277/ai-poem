@@ -18,14 +18,20 @@ class UserUpdate(BaseModel):
 class User(UserBase):
     id: int
     avatar: Optional[str] = None
-    is_active: bool
-    total_score: int
-    win_count: int
-    lose_count: int
-    draw_count: int
-    win_rate: float
-    created_at: datetime
+    is_active: bool = True
+    total_score: int = 0
+    win_count: int = 0
+    lose_count: int = 0
+    draw_count: int = 0
+    win_rate: float = 0.0
+    created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class UserInDB(User):
+    hashed_password: str
 
     class Config:
         from_attributes = True

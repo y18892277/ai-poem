@@ -2,17 +2,28 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from datetime import timedelta
-from . import schemas, auth
-from .models import Base, User, Battle, Season  # 添加所有需要的模型
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+from fastapi.openapi.utils import get_openapi
+from . import schemas, auth, models, crud
+from .models import Base, User, Battle, Season, Poetry
 from .core.database import engine, get_db
 import logging
+import random
+from .core.init_db import init_poetry_data
+
+
 
 # 创建数据库表
 Base.metadata.create_all(bind=engine)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# 在创建数据库表后初始化数据
+Base.metadata.create_all(bind=engine)
+init_poetry_data(next(get_db()))
 
 app = FastAPI(
     title="诗词接龙游戏API",
@@ -220,3 +231,128 @@ async def update_user(
     db.commit()
     db.refresh(current_user)
     return current_user
+
+@app.post("/api/v1/battle/create", response_model=schemas.Battle)
+async def create_battle(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    try:
+        # 创建新的对战记录
+        battle = models.Battle(
+            user_id=current_user.id,
+            status="active",
+            score=0,
+            current_poetry_id=None
+        )
+        db.add(battle)
+        db.commit()
+        db.refresh(battle)
+        
+        # 获取随机诗词作为起始句
+        poetry = get_random_poetry(db)
+        battle.current_poetry_id = poetry.id
+        db.commit()
+        
+        return battle
+    except Exception as e:
+        logger.error(f"Error creating battle: {str(e)}")
+        raise HTTPException(status_code=500, detail="创建对战失败")
+    
+
+@app.get("/api/v1/battle/random-poetry", response_model=schemas.Poetry)
+async def get_random_poetry_endpoint(
+    difficulty: int = 1,
+    db: Session = Depends(get_db)
+):
+    try:
+        poetry = get_random_poetry(db, difficulty)
+        return poetry
+    except Exception as e:
+        logger.error(f"Error getting random poetry: {str(e)}")
+        raise HTTPException(status_code=500, detail="获取随机诗词失败")
+
+
+
+@app.post("/api/v1/battle/check-chain")
+async def check_poetry_chain(
+    chain_data: schemas.PoetryChain,
+    db: Session = Depends(get_db)
+):
+    try:
+        # 获取前一句诗词
+        poetry1 = db.query(models.Poetry).filter(
+            models.Poetry.content == chain_data.poetry1
+        ).first()
+        
+        if not poetry1:
+            raise HTTPException(status_code=400, detail="前一句诗词不存在")
+        
+        # 检查接龙是否有效
+        can_chain, chain_type = check_poetry_chain_valid(
+            poetry1.content,
+            chain_data.poetry2
+        )
+        
+        return {
+            "can_chain": can_chain,
+            "chain_type": chain_type
+        }
+    except Exception as e:
+        logger.error(f"Error checking poetry chain: {str(e)}")
+        raise HTTPException(status_code=500, detail="检查接龙失败")
+
+
+    
+
+@app.put("/api/v1/battle/{battle_id}", response_model=schemas.Battle)
+async def update_battle(
+    battle_id: int,
+    battle_update: schemas.BattleUpdate,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    try:
+        battle = db.query(models.Battle).filter(
+            models.Battle.id == battle_id,
+            models.Battle.user_id == current_user.id
+        ).first()
+        
+        if not battle:
+            raise HTTPException(status_code=404, detail="对战记录不存在")
+        
+        # 更新对战信息
+        for field, value in battle_update.dict(exclude_unset=True).items():
+            setattr(battle, field, value)
+        
+        db.commit()
+        db.refresh(battle)
+        return battle
+    except Exception as e:
+        logger.error(f"Error updating battle: {str(e)}")
+        raise HTTPException(status_code=500, detail="更新对战失败")
+    
+
+# 辅助函数
+def get_random_poetry(db: Session, difficulty: int = 1) -> models.Poetry:
+    """获取随机诗词"""
+    poetry = db.query(models.Poetry).order_by(
+        func.random()
+    ).first()
+    
+    if not poetry:
+        raise HTTPException(status_code=404, detail="没有可用的诗词")
+    
+    return poetry
+
+def check_poetry_chain_valid(poetry1: str, poetry2: str) -> tuple[bool, str]:
+    """检查诗词接龙是否有效"""
+    # 去除标点符号和空格
+    p1 = ''.join(c for c in poetry1 if c.isalnum())
+    p2 = ''.join(c for c in poetry2 if c.isalnum())
+    
+    # 检查首尾字接龙
+    if p1[-1] == p2[0]:
+        return True, "首尾字接龙"
+    
+    return False, "无效接龙"
