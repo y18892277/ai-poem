@@ -1,10 +1,15 @@
+// frontend/src/store/user.js
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import axios from '@/utils/axios'
 
 export const useUserStore = defineStore('user', () => {
   const token = ref(localStorage.getItem('token') || '')
   const userInfo = ref(JSON.parse(localStorage.getItem('userInfo') || '{}'))
+
+  // 计算属性
+  const isLoggedIn = computed(() => !!token.value)
+  const username = computed(() => userInfo.value?.username || '')
 
   const setToken = (newToken) => {
     token.value = newToken
@@ -36,16 +41,6 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
-  const register = async (userData) => {
-    try {
-      const response = await axios.post('/api/v1/register', userData)
-      return response.data
-    } catch (error) {
-      console.error('Registration failed:', error)
-      throw error
-    }
-  }
-
   const logout = () => {
     token.value = ''
     userInfo.value = {}
@@ -54,23 +49,12 @@ export const useUserStore = defineStore('user', () => {
     delete axios.defaults.headers.common['Authorization']
   }
 
-  const updateProfile = async (profileData) => {
-    try {
-      const response = await axios.put('/api/v1/users/me', profileData)
-      setUserInfo(response.data)
-      return response.data
-    } catch (error) {
-      console.error('Profile update failed:', error)
-      throw error
-    }
-  }
-
   return {
     token,
     userInfo,
+    isLoggedIn,
+    username,
     login,
-    register,
-    logout,
-    updateProfile
+    logout
   }
-}) 
+})

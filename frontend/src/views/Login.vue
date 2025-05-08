@@ -126,6 +126,7 @@ const rules = {
   ]
 }
 
+// frontend/src/views/Login.vue
 const handleSubmit = async () => {
   if (!formRef.value) return
   
@@ -134,24 +135,55 @@ const handleSubmit = async () => {
     loading.value = true
     
     if (isLogin.value) {
-      await userStore.login(form.username, form.password)
+      // 登录逻辑
+      const formData = new FormData()
+      formData.append('username', form.username)
+      formData.append('password', form.password)
+
+      const response = await fetch('http://localhost:8000/api/v1/token', {
+        method: 'POST',
+        body: new URLSearchParams(formData),
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      })
+
+      if (!response.ok) {
+        const err = await response.json()
+        throw new Error(err.detail || '登录失败')
+      }
+
+      const data = await response.json()
+      
+      // 存储 token
+      localStorage.setItem('token', data.access_token)
+      
+      // 获取用户信息
+      const userResponse = await fetch('http://localhost:8000/api/v1/users/me', {
+        headers: {
+          'Authorization': `Bearer ${data.access_token}`
+        }
+      })
+      
+      if (!userResponse.ok) {
+        throw new Error('获取用户信息失败')
+      }
+      
+      const userData = await userResponse.json()
+      localStorage.setItem('userInfo', JSON.stringify(userData))
+      
       ElMessage.success('登录成功')
       router.push('/')
     } else {
-      await userStore.register({
-        username: form.username,
-        password: form.password,
-        email: form.email,
-        nickname: form.nickname || form.username
-      })
+      // 注册逻辑
+      const { confirmPassword, ...registerData } = form
+      await userStore.register(registerData)
       ElMessage.success('注册成功，请登录')
       isLogin.value = true
-      form.password = ''
-      form.confirmPassword = ''
     }
   } catch (error) {
     console.error('Operation failed:', error)
-    ElMessage.error(error.response?.data?.detail || '操作失败，请重试')
+    ElMessage.error(error.message || '操作失败，请重试')
   } finally {
     loading.value = false
   }
