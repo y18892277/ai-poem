@@ -27,13 +27,28 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   response => response,
   error => {
-    if (error.response) {
-      // 处理后端返回的错误
+    if (error.response && error.response.data) {
       const data = error.response.data;
-      const message = data.message || data.detail || '请求失败';
-      return Promise.reject(new Error(message));
+      let detailedMessage = '请求处理失败'; // Default message
+
+      if (Array.isArray(data.detail)) {
+        // Format FastAPI validation errors array
+        detailedMessage = data.detail.map(err => {
+          const field = err.loc && err.loc.length > 1 ? err.loc[1] : (err.loc ? err.loc.join('.') : 'field');
+          return `${field}: ${err.msg}`;
+        }).join('; ');
+      } else if (typeof data.detail === 'string') {
+        detailedMessage = data.detail;
+      } else if (typeof data.message === 'string') {
+        detailedMessage = data.message;
+      }
+
+      console.error("Backend Error Data:", data); // Log the original error data from backend
+      return Promise.reject(new Error(detailedMessage));
+    } else if (error.message) {
+      return Promise.reject(new Error(error.message));
     }
-    return Promise.reject(error);
+    return Promise.reject(new Error('网络请求错误'));
   }
 );
 

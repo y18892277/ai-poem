@@ -82,15 +82,6 @@
               </el-tag>
             </div>
           </div>
-          <div class="poetry-actions">
-            <el-button
-              :type="isFavorite(poetry.id) ? 'danger' : 'default'"
-              :icon="isFavorite(poetry.id) ? 'Star' : 'StarFilled'"
-              @click="toggleFavorite(poetry.id)"
-            >
-              {{ isFavorite(poetry.id) ? '取消收藏' : '收藏' }}
-            </el-button>
-          </div>
         </div>
       </template>
       <el-empty v-else description="暂无诗词" />
@@ -160,24 +151,11 @@ const handlePageChange = (page) => {
   poetryStore.fetchPoetryList(page)
 }
 
-const toggleFavorite = async (poetryId) => {
-  if (poetryStore.isFavorite(poetryId)) {
-    await poetryStore.removeFavorite(poetryId)
-  } else {
-    await poetryStore.addFavorite(poetryId)
-  }
-}
-
-const isFavorite = (poetryId) => poetryStore.isFavorite(poetryId)
-
 // 生命周期钩子
 onMounted(async () => {
   try {
     loading.value = true
-    await Promise.all([
-      poetryStore.fetchPoetryList(),
-      poetryStore.fetchFavorites()
-    ])
+    await poetryStore.fetchPoetryList()
   } catch (error) {
     ElMessage.error('加载诗词库失败')
   } finally {
@@ -263,10 +241,6 @@ onMounted(async () => {
 .tag {
   margin-right: 8px;
   margin-bottom: 8px;
-}
-
-.poetry-actions {
-  margin-left: 20px;
 }
 
 .pagination {

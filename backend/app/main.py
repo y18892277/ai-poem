@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Query, Request, Form, UploadFile, File
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, desc
 from datetime import timedelta
@@ -466,7 +466,7 @@ async def get_rankings(
         raise HTTPException(status_code=500, detail="获取排行榜失败")
 
 # 诗词库相关API
-@app.get("/v1/poetry/list", response_model=schemas.PoetryListResponse)
+@app.get("/api/v1/poetry/list", response_model=schemas.PoetryListResponse)
 async def get_poetry_list(
     page: int = 1,
     pageSize: int = 10,

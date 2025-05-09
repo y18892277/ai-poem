@@ -5,6 +5,8 @@ import json # For JSON Lines output
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
 import time # For potential delays
 import os # Import os module
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry # Corrected import for Retry
 
 # 爬取的诗歌网址 (可以保持不变或按需调整)
 urls = [
@@ -22,10 +24,34 @@ headers = {
 }
 
 print("Fetching poem links...")
+
+# Function to create a session with retry logic
+def requests_retry_session(
+    retries=5, # Increased retries
+    backoff_factor=2, # Increased backoff_factor for more significant exponential delay
+    status_forcelist=(500, 502, 503, 504, 408), # Added 408 Request Timeout
+    session=None,
+):
+    session = session or requests.Session()
+    retry = Retry(
+        total=retries,
+        read=retries,
+        connect=retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=status_forcelist,
+        allowed_methods=frozenset(['GET', 'POST']) # Allow retries for POST if needed in future
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
+
 # 获取所有诗歌链接
 for url_category in urls:
     try:
-        req = requests.get(url_category, headers=headers, timeout=10)
+        # Use session for retries, increase timeout
+        session = requests_retry_session()
+        req = session.get(url_category, headers=headers, timeout=30) # Increased timeout
         req.raise_for_status() # Check for HTTP errors
         soup = BeautifulSoup(req.text, "lxml")
         # Sons div contains links to individual poems or further sub-categories
@@ -40,7 +66,7 @@ for url_category in urls:
                         poem_links.append('https://so.gushiwen.org' + href)
                     else:
                         poem_links.append(href)
-        time.sleep(0.5) # Small delay
+        # time.sleep(0.5) # Removed, retry backoff will handle delays
     except requests.exceptions.RequestException as e:
         print(f"Error fetching category page {url_category}: {e}")
     except Exception as e:
@@ -58,7 +84,8 @@ def get_poem_details(url):
     poem_data = {} # Initialize poem_data at the beginning of the function
     try:
         # print(f"Fetching details for: {url}")
-        req = requests.get(url, headers=headers, timeout=10)
+        session = requests_retry_session()
+        req = session.get(url, headers=headers, timeout=30) # Increased timeout and use session
         req.raise_for_status()
         soup = BeautifulSoup(req.text, "lxml")
 
@@ -146,7 +173,7 @@ def get_poem_details(url):
         poem_data['difficulty'] = 1
 
         structured_poem_list.append(poem_data)
-        time.sleep(0.1)
+        time.sleep(0.25) # Add a small delay after each successful fetch
 
     except requests.exceptions.RequestException as e:
         print(f"Error fetching {url}: {e}")
@@ -155,7 +182,7 @@ def get_poem_details(url):
 
 
 print(f"\nStarting to fetch details for {len(poem_links)} poems...")
-executor = ThreadPoolExecutor(max_workers=5)
+executor = ThreadPoolExecutor(max_workers=2) # Further reduced max_workers
 future_tasks = [executor.submit(get_poem_details, url) for url in poem_links]
 wait(future_tasks, return_when=ALL_COMPLETED)
 

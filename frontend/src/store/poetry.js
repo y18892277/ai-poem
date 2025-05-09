@@ -1,11 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getPoetryList, getPoetryDetail, getFavorites, toggleFavorite } from '../api/poetry'
+import { getPoetryList, getPoetryDetail } from '../api/poetry'
 
 export const usePoetryStore = defineStore('poetry', () => {
   const poetryList = ref([])
-  const favorites = ref([])
   const loading = ref(false)
   const searchQuery = ref('')
   const currentPage = ref(1)
@@ -49,11 +48,27 @@ export const usePoetryStore = defineStore('poetry', () => {
   const fetchPoetryList = async (page = 1, params = {}) => {
     try {
       loading.value = true
-      const response = await getPoetryList({
+      // Ensure only known and valid parameters are sent for the list view
+      const requestParams = {
         page,
         pageSize: 10,
-        ...params
-      })
+      };
+      if (params.keyword && typeof params.keyword === 'string' && params.keyword.trim() !== '') {
+        requestParams.keyword = params.keyword.trim();
+      }
+      if (params.dynasty && typeof params.dynasty === 'string' && params.dynasty.trim() !== '') {
+        requestParams.dynasty = params.dynasty.trim();
+      }
+      if (params.type && typeof params.type === 'string' && params.type.trim() !== '') {
+        requestParams.type = params.type.trim();
+      }
+      // Only add wordCount if it's a positive number.
+      // Backend should ideally handle null/0 as "don't filter".
+      if (params.wordCount && typeof params.wordCount === 'number' && params.wordCount > 0) { 
+        requestParams.wordCount = params.wordCount;
+      }
+
+      const response = await getPoetryList(requestParams) // Use the cleaned requestParams
       
       if (response.data.success) {
         poetryList.value = response.data.data
@@ -68,61 +83,6 @@ export const usePoetryStore = defineStore('poetry', () => {
       throw error
     } finally {
       loading.value = false
-    }
-  }
-
-  // 获取收藏列表
-  const fetchFavorites = async () => {
-    try {
-      const response = await getFavorites()
-      if (response.data.success) {
-        favorites.value = response.data.data
-      } else {
-        throw new Error(response.data.message || '获取收藏列表失败')
-      }
-    } catch (error) {
-      console.error('Failed to fetch favorites:', error)
-      ElMessage.error(error.message || '获取收藏列表失败')
-      throw error
-    }
-  }
-
-  // 添加收藏
-  const addFavorite = async (poetryId) => {
-    try {
-      const response = await toggleFavorite(poetryId)
-      if (response.data.success) {
-        const poetry = poetryList.value.find(p => p.id === poetryId)
-        if (poetry) {
-          favorites.value.push(poetry)
-        }
-        ElMessage.success('收藏成功')
-        return true
-      } else {
-        throw new Error(response.data.message || '收藏失败')
-      }
-    } catch (error) {
-      console.error('Failed to add favorite:', error)
-      ElMessage.error(error.message || '收藏失败')
-      return false
-    }
-  }
-
-  // 取消收藏
-  const removeFavorite = async (poetryId) => {
-    try {
-      const response = await toggleFavorite(poetryId)
-      if (response.data.success) {
-        favorites.value = favorites.value.filter(p => p.id !== poetryId)
-        ElMessage.success('取消收藏成功')
-        return true
-      } else {
-        throw new Error(response.data.message || '取消收藏失败')
-      }
-    } catch (error) {
-      console.error('Failed to remove favorite:', error)
-      ElMessage.error(error.message || '取消收藏失败')
-      return false
     }
   }
 
@@ -149,7 +109,6 @@ export const usePoetryStore = defineStore('poetry', () => {
 
   return {
     poetryList,
-    favorites,
     loading,
     searchQuery,
     currentPage,
@@ -160,10 +119,6 @@ export const usePoetryStore = defineStore('poetry', () => {
     fetchPoetryList,
     searchPoetry,
     advancedSearch,
-    fetchFavorites,
-    addFavorite,
-    removeFavorite,
-    isFavorite: (poetryId) => favorites.value.some(p => p.id === poetryId),
     resetSearch
   }
 }) 
