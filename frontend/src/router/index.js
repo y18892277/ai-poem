@@ -25,7 +25,7 @@ const router = createRouter({
     {
       path: '/battle',
       name: 'Battle',
-      component: () => import('@/views/Battle.vue'),
+      component: () => import('@/views/BattlePage.vue'),
       meta: { requiresAuth: true }
     },
     {

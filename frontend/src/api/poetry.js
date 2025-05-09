@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // 创建axios实例
 const api = axios.create({
-  baseURL: 'http://localhost:8000/v1/poetry',
+  baseURL: 'http://localhost:8000/api/v1/poetry',
   timeout: 5000,
   headers: {
     'Content-Type': 'application/json'
@@ -47,12 +47,13 @@ export const getPoetryDetail = (id) => {
   return api.get(`/${id}`);
 };
 
-// 获取收藏列表
-export const getFavorites = () => {
-  return api.get('/favorites');
-};
+// Removed getFavorites and toggleFavorite functions
+// // 获取收藏列表
+// export const getFavorites = () => {
+//   return api.get('/favorites');
+// };
 
-// 收藏/取消收藏
-export const toggleFavorite = (id) => {
-  return api.post(`/${id}/favorite`);
-}; 
+// // 收藏/取消收藏
+// export const toggleFavorite = (id) => {
+//   return api.post(`/${id}/favorite`);
+// }; 

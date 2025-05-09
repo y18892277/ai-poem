@@ -7,8 +7,9 @@ from sqlalchemy import func, case, desc
 from datetime import timedelta
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.openapi.utils import get_openapi
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict, Any
 import logging
+import re # For parsing poem lines
 
 from .core.database import engine, get_db, Base
 from .core.init_database import init_database
@@ -16,6 +17,8 @@ from . import schemas, auth
 from .models import User, Battle, Season, Poetry, UserFavoritePoetry
 from .core.init_db import init_poetry_data, init_season_data
 import random
+from .schemas.battle import BattleCreate, BattleResponse, ChainSubmitRequest, ChainSubmitResponse
+from .crud.battle import get_active_battle, get_battle
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -216,26 +219,89 @@ async def update_user(
     db.refresh(current_user)
     return current_user
 
-@app.post("/api/v1/battle/create", response_model=schemas.Battle)
-async def create_battle(
+@app.post("/api/v1/battles/start", response_model=BattleResponse, tags=["Battle Modes"])
+async def start_battle_endpoint(
+    battle_create: BattleCreate,
     current_user: User = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # 获取当前赛季
-    current_season = db.query(Season).filter(Season.status == "active").first()
-    if not current_season:
-        raise HTTPException(status_code=404, detail="没有进行中的赛季")
-    
-    # 创建新对战
-    battle = Battle(
-        user_id=current_user.id,
-        season_id=current_season.id,
-        status="active"
-    )
-    
+    active_battle = get_active_battle(db, user_id=current_user.id)
+    if active_battle:
+        # Option 1: Abort existing battle and start a new one (Now active)
+        active_battle.status = "aborted"
+        db.add(active_battle) # Ensure SQLAlchemy tracks the change
+        db.commit() # Commit the change for the aborted battle
+        # It might be good to refresh active_battle here if its state is used later before reassigning, but we are creating a new one.
+        logger.info(f"User {current_user.id} aborted battle {active_battle.id} to start a new one.")
+        # Option 2: Raise error (Now commented out)
+        # raise HTTPException(status_code=400, detail=f"User already has an active battle (ID: {active_battle.id}). Finish or abort it first.")
+
+    active_season = db.query(Season).filter(Season.status == "active").order_by(Season.id.desc()).first()
+    if not active_season:
+        # Fallback: if no active season, use the most recent season
+        active_season = db.query(Season).order_by(Season.id.desc()).first()
+        if not active_season:
+            raise HTTPException(status_code=404, detail="No season found to start a battle.")
+
+    new_battle_data = {
+        "user_id": current_user.id,
+        "season_id": active_season.id,
+        "battle_type": battle_create.battle_type,
+        "status": "active",
+        "score": 0,
+        "rounds": 0,
+        "current_round_num": 1,
+        "battle_records": [] # Initialize as empty list
+    }
+
+    if battle_create.battle_type == "normal_chain":
+        random_poetry = db.query(Poetry).order_by(func.random()).first() # func needs to be imported from sqlalchemy
+        if not random_poetry or not random_poetry.content:
+            raise HTTPException(status_code=500, detail="Could not fetch a poem for normal chain mode.")
+        
+        lines = parse_poem_lines(random_poetry.content)
+        if len(lines) < 2: # Need at least two lines for a question and an answer
+            # Try to find another poem if the first one is too short
+            for _ in range(5): # Try a few times
+                random_poetry = db.query(Poetry).order_by(func.random()).first()
+                if random_poetry and random_poetry.content:
+                    lines = parse_poem_lines(random_poetry.content)
+                    if len(lines) >= 2:
+                        break
+            if len(lines) < 2:
+                 raise HTTPException(status_code=500, detail="Selected poem does not have enough lines for normal chain mode after multiple tries.")
+
+        new_battle_data["current_poetry_id"] = random_poetry.id
+        new_battle_data["current_question"] = lines[0] # First line as question
+        new_battle_data["expected_answer"] = lines[1]  # Second line as expected answer
+        # Record initial state for the first round
+        new_battle_data["battle_records"].append(
+            schemas.RoundRecord(
+                round_num=1, 
+                question=lines[0]
+            ).model_dump() # Use .model_dump() for Pydantic v2
+        )
+
+    elif battle_create.battle_type == "smart_chain":
+        ai_line = await get_ai_starting_line(db=db)
+        if not ai_line:
+            raise HTTPException(status_code=500, detail="AI failed to provide a starting line.")
+        new_battle_data["current_question"] = ai_line
+        # Record initial state for the first round
+        new_battle_data["battle_records"].append(
+            schemas.RoundRecord(
+                round_num=1, 
+                question=ai_line
+            ).model_dump()
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Invalid battle_type specified.")
+
+    battle = Battle(**new_battle_data)
     db.add(battle)
     db.commit()
     db.refresh(battle)
+    logger.info(f"Battle {battle.id} started for user {current_user.id}, type: {battle.battle_type}")
     return battle
 
 @app.get("/api/v1/battle/random-poetry", response_model=schemas.Poetry)
@@ -278,7 +344,7 @@ async def check_poetry_chain(
         logger.error(f"Error checking poetry chain: {str(e)}")
         raise HTTPException(status_code=500, detail="检查接龙失败")
 
-@app.put("/api/v1/battle/{battle_id}", response_model=schemas.Battle)
+@app.put("/api/v1/battles/{battle_id}", response_model=schemas.BattleResponse)
 async def update_battle(
     battle_id: int,
     battle_update: schemas.BattleUpdate,
@@ -295,9 +361,11 @@ async def update_battle(
         raise HTTPException(status_code=403, detail="没有权限修改此对战记录")
     
     # 更新对战记录
-    for key, value in battle_update.dict(exclude_unset=True).items():
+    update_data = battle_update.model_dump(exclude_unset=True) # Pydantic V2
+    for key, value in update_data.items():
         setattr(battle, key, value)
     
+    db.add(battle) # Add to session before commit if changed
     db.commit()
     db.refresh(battle)
     return battle
@@ -442,7 +510,7 @@ async def get_poetry_list(
         logger.error(f"Error getting poetry list: {str(e)}")
         raise HTTPException(status_code=500, detail="获取诗词列表失败")
 
-@app.get("/v1/poetry/{poetry_id}", response_model=schemas.PoetryResponse)
+@app.get("/api/v1/poetry/{poetry_id}", response_model=schemas.PoetryResponse)
 async def get_poetry_detail(
     poetry_id: int,
     db: Session = Depends(get_db)
@@ -459,72 +527,177 @@ async def get_poetry_detail(
         logger.error(f"Error getting poetry detail: {str(e)}")
         raise HTTPException(status_code=500, detail="获取诗词详情失败")
 
-@app.get("/v1/poetry/favorites", response_model=schemas.PoetryListResponse)
-async def get_favorite_poetry(
-    current_user: User = Depends(auth.get_current_user),
-    page: int = 1,
-    pageSize: int = 10,
-    db: Session = Depends(get_db)
-):
-    try:
-        # 获取用户收藏的诗词
-        query = db.query(Poetry)\
-                 .join(UserFavoritePoetry)\
-                 .filter(UserFavoritePoetry.user_id == current_user.id)
+# Placeholder AI functions (as discussed)
+async def get_ai_starting_line(db: Session = Depends(get_db)) -> str:
+    # Implementation of get_ai_starting_line function
+    pass
 
-        # 计算总数
-        total = query.count()
+def clean_poem_line(line: str) -> str:
+    """Removes common punctuation and leading/trailing spaces from a poem line."""
+    if not line: 
+        return ""
+    # 移除常见标点符号： 中文的 ，。！？； 和英文的 ,.!?; 以及空格
+    cleaned_line = re.sub(r"[，。！？；,.!?;\s]+", "", line)
+    return cleaned_line.strip()
 
-        # 分页
-        favorites = query.offset((page - 1) * pageSize)\
-                        .limit(pageSize)\
-                        .all()
-
-        return {
-            "success": True,
-            "data": favorites,
-            "total": total,
-            "page": page,
-            "pageSize": pageSize
-        }
-    except Exception as e:
-        logger.error(f"Error getting favorite poetry: {str(e)}")
-        raise HTTPException(status_code=500, detail="获取收藏列表失败")
-
-@app.post("/v1/poetry/{poetry_id}/favorite", response_model=schemas.PoetryFavoriteResponse)
-async def toggle_favorite_poetry(
-    poetry_id: int,
+@app.post("/api/v1/battles/{battle_id}/submit", response_model=ChainSubmitResponse, tags=["Battle Modes"])
+async def submit_battle_answer(
+    battle_id: int,
+    submission: ChainSubmitRequest,
     current_user: User = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    try:
-        # 检查诗词是否存在
-        poetry = db.query(Poetry).filter(Poetry.id == poetry_id).first()
-        if not poetry:
-            raise HTTPException(status_code=404, detail="诗词不存在")
+    battle = get_battle(db, battle_id=battle_id) # from crud.battle
+    if not battle:
+        raise HTTPException(status_code=404, detail="Battle not found.")
+    if battle.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to submit to this battle.")
+    if battle.status != "active":
+        raise HTTPException(status_code=400, detail=f"Battle is not active (current status: {battle.status}).")
 
-        # 检查是否已收藏
-        favorite = db.query(UserFavoritePoetry)\
-                    .filter(
-                        UserFavoritePoetry.user_id == current_user.id,
-                        UserFavoritePoetry.poetry_id == poetry_id
-                    ).first()
+    user_answer_raw = submission.answer
+    user_answer_cleaned = clean_poem_line(user_answer_raw)
+    is_correct_answer = False
+    message = ""
+    next_q_for_normal = None
+    ai_next_line_for_smart = None
+    points_this_round = 0
+    
+    # Find the existing round record for the current round to update it with user's answer
+    # This assumes the record was created when the question was presented in the start_battle or previous submit.
+    # If battle_records is empty or last record is not for current_round_num, it means something is off
+    # or it's the very first question of a multi-question-per-round system (not our case here)
+    current_round_record_dict = None
+    if battle.battle_records and isinstance(battle.battle_records, list):
+        # Find the record for the current round to update it
+        # If a round record for current_round_num was already added when question was set,
+        # we update it. Otherwise, we create a new one.
+        # For simplicity, let's assume a round_record is made per submit cycle.
+        pass # Will create a new full record below
 
-        if favorite:
-            # 取消收藏
-            db.delete(favorite)
-            message = "取消收藏成功"
+    # Initialize data for the current round record
+    round_data_for_append = {
+        "round_num": battle.current_round_num,
+        "question": battle.current_question,
+        "user_answer": user_answer_raw,
+        "is_correct": False, # Default to False
+        "ai_judgement": None,
+        "points_awarded": 0
+    }
+
+    if battle.battle_type == "normal_chain":
+        if not battle.expected_answer:
+            # This case should ideally not happen if a question is active
+            logger.error(f"Normal chain battle {battle.id} has no expected_answer for question '{battle.current_question}'")
+            raise HTTPException(status_code=500, detail="Error in battle state: no expected answer.")
+        
+        expected_answer_cleaned = clean_poem_line(battle.expected_answer)
+        
+        if user_answer_cleaned == expected_answer_cleaned:
+            is_correct_answer = True
+            message = "回答正确！"
+            points_this_round = 10 # Example points
+            battle.score += points_this_round
+            
+            current_poem = db.query(Poetry).filter(Poetry.id == battle.current_poetry_id).first()
+            if not current_poem:
+                message += " 但未能加载诗词信息。游戏结束。"
+                battle.status = "completed_win" # Or an error status
+            else:
+                lines = parse_poem_lines(current_poem.content)
+                try:
+                    # Find index of the just-answered `battle.expected_answer`
+                    idx_of_last_correct_answer = lines.index(battle.expected_answer)
+                    
+                    if idx_of_last_correct_answer + 1 < len(lines):
+                        # Next line becomes the new question
+                        next_q_for_normal = lines[idx_of_last_correct_answer + 1]
+                        if idx_of_last_correct_answer + 2 < len(lines):
+                            # And the line after that is the new expected answer
+                            battle.expected_answer = lines[idx_of_last_correct_answer + 2]
+                        else:
+                            # Only one line left, it is the question, no more expected answer for *next* round
+                            battle.expected_answer = None # This means after user answers next_q_for_normal, poem ends
+                    else:
+                        # Poem completed with this correct answer
+                        message += " 恭喜！你已完成这首诗的接龙！"
+                        battle.status = "completed_win"
+                        next_q_for_normal = None # No next question
+                        battle.expected_answer = None
+                except ValueError:
+                    message += " 但在寻找下一句时出现内部错误。游戏结束。"
+                    battle.status = "completed_win" # Or an error status
         else:
-            # 添加收藏
-            favorite = UserFavoritePoetry(
-                user_id=current_user.id,
-                poetry_id=poetry_id
-            )
-            db.add(favorite)
-            message = "收藏成功"
+            is_correct_answer = False
+            message = f"回答错误。正确答案应为：{battle.expected_answer}"
+            points_this_round = -5 # Example penalty
+            battle.score = max(0, battle.score + points_this_round)
+            battle.status = "completed_lose"
 
-        db.commit()
-        return {"success": True, "message": message}
-    except Exception as e:
-        logger.error(f"Error toggling favorite poetry: {str(e)}")
-        raise HTTPException(status_code=500, detail="操作收藏失败")
+    elif battle.battle_type == "smart_chain":
+        ai_is_correct, ai_message = await check_ai_poetry_chain(battle.current_question, user_answer_raw, db=db)
+        is_correct_answer = ai_is_correct
+        message = ai_message
+        round_data_for_append["ai_judgement"] = ai_message
+
+        if is_correct_answer:
+            points_this_round = 15
+            battle.score += points_this_round
+            ai_next_line_for_smart = await get_ai_response_to_line(user_answer_raw, db=db)
+            if not ai_next_line_for_smart:
+                message += " AI已词穷，恭喜你获胜！"
+                battle.status = "completed_win"
+        else:
+            points_this_round = -7
+            battle.score = max(0, battle.score + points_this_round)
+            battle.status = "completed_lose"
+    
+    round_data_for_append["is_correct"] = is_correct_answer
+    round_data_for_append["points_awarded"] = points_this_round
+    
+    battle.rounds += 1
+    # Ensure battle_records is a list before appending
+    if not isinstance(battle.battle_records, list):
+        battle.battle_records = []
+    battle.battle_records.append(round_data_for_append)
+
+    if battle.status == "active":
+        battle.current_round_num += 1
+        if battle.battle_type == "normal_chain":
+            battle.current_question = next_q_for_normal 
+            # If next_q_for_normal is None, it means game ended (win/loss handled above)
+            if not battle.current_question: # Game ended
+                 if battle.status == "active": # Should have been set to win/loss already
+                    message = message.replace("回答正确！","") + "诗词已尽，挑战成功！"
+                    battle.status = "completed_win"
+        elif battle.battle_type == "smart_chain":
+            if ai_next_line_for_smart:
+                battle.current_question = ai_next_line_for_smart
+            elif is_correct_answer: # AI was correct but AI has no next line
+                if battle.status == "active": battle.status = "completed_win"
+            # If AI was incorrect, status is already completed_lose
+    else: # Game has ended (completed_win or completed_lose)
+        logger.info(f"Battle {battle.id} ended. Status: {battle.status}, Score: {battle.score}")
+
+    db.add(battle) # Use add for SQLAlchemy to track changes before commit
+    db.commit()
+    db.refresh(battle)
+
+    final_round_record_obj = schemas.RoundRecord(**round_data_for_append)
+
+    return ChainSubmitResponse(
+        is_correct=is_correct_answer,
+        message=message,
+        next_question=battle.current_question if battle.status == "active" else None, 
+        ai_next_line=battle.current_question if battle.status == "active" and battle.battle_type == "smart_chain" else None, 
+        updated_battle_state=BattleResponse.model_validate(battle),
+        current_round_record=final_round_record_obj
+    )
+
+# Helper function to parse poem content into lines
+def parse_poem_lines(content: str) -> List[str]:
+    if not content:
+        return []
+    # Splits by common Chinese and English delimiters, keeps non-empty lines
+    lines = re.split(r'[，。！？；,.!?;\n\r]+', content) 
+    return [line.strip() for line in lines if line.strip()]

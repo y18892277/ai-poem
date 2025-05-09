@@ -1,15 +1,19 @@
 from .user import User, UserCreate, UserUpdate, UserInDB, Token, TokenData
-from .battle import Battle, BattleCreate, BattleUpdate
+from .battle import (
+    BattleBase, BattleCreate, BattleUpdate, BattleResponse, 
+    ChainSubmitRequest, RoundRecord, ChainSubmitResponse
+)
 from .poetry import (
     Poetry, PoetryCreate, PoetryUpdate, PoetryChain,
-    PoetryResponse, PoetryListResponse, PoetryFavoriteResponse
+    PoetryResponse, PoetryListResponse
 )
 from .season import Season, SeasonCreate, SeasonUpdate
 
 __all__ = [
     "User", "UserCreate", "UserUpdate", "UserInDB", "Token", "TokenData",
-    "Battle", "BattleCreate", "BattleUpdate",
+    "BattleBase", "BattleCreate", "BattleUpdate", "BattleResponse",
+    "ChainSubmitRequest", "RoundRecord", "ChainSubmitResponse",
     "Poetry", "PoetryCreate", "PoetryUpdate", "PoetryChain",
-    "PoetryResponse", "PoetryListResponse", "PoetryFavoriteResponse",
+    "PoetryResponse", "PoetryListResponse",
     "Season", "SeasonCreate", "SeasonUpdate"
 ] 

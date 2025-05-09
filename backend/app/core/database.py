@@ -1,8 +1,8 @@
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import logging
 from .config import settings
+from ..models.base import Base
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -29,9 +29,6 @@ except Exception as e:
 
 # 创建会话工厂
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# 声明基类
-Base = declarative_base()
 
 # 依赖项
 def get_db():
