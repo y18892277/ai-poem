@@ -31,6 +31,15 @@
             :loading="gameStore.isLoading"
             style="margin-top: 10px;"
             >提交答案</el-button>
+          
+          <el-button 
+            type="danger" 
+            @click="handleExitGame" 
+            :loading="gameStore.isLoading"
+            v-if="gameStore.currentGame && !gameStore.gameOver && gameStore.currentGame.status === 'active'"
+            style="margin-top: 10px; margin-left: 10px;"
+            plain
+            >退出游戏</el-button>
         </div>
 
         <div v-if="gameStore.feedbackMessage" class="feedback-message"
@@ -89,6 +98,10 @@ function handlePlayAgain() {
 onUnmounted(() => {
   // gameStore.resetGame(); // Optional: reset if user navigates away mid-game
 });
+
+function handleExitGame() {
+  gameStore.exitGame();
+}
 
 </script>
 

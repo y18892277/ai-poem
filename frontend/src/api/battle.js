@@ -59,3 +59,19 @@ export function getSeasonRankings(seasonId, limit = 10) {
     params: { season: seasonId, pageSize: limit }
   })
 }
+
+// Abort an active battle
+export function abortBattle(battleId) {
+  return request({
+    url: `/api/v1/battles/${battleId}/abort`,
+    method: 'post'
+  });
+}
+
+// 获取指定对战信息 (可能已存在或不需要，但作为参考)
+// export function getBattleDetails(battleId) {
+//   return request({
+//     url: `/api/v1/battles/${battleId}`,
+//     method: 'get'
+//   });
+// }

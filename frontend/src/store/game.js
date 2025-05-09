@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { startNewBattle, submitBattleAnswer } from '@/api/battle'; // Assuming @ refers to src
+import { startNewBattle, submitBattleAnswer, abortBattle } from '@/api/battle'; // Assuming @ refers to src
 import { ElMessage } from 'element-plus';
 
 export const useGameStore = defineStore('game', () => {
@@ -87,6 +87,38 @@ export const useGameStore = defineStore('game', () => {
     score.value = 0;
   }
 
+  async function exitGame() {
+    if (!currentGame.value || !currentGame.value.id) {
+      feedbackMessage.value = '没有可退出的对战。';
+      ElMessage.info(feedbackMessage.value);
+      return;
+    }
+    if (currentGame.value.status !== 'active'){
+      feedbackMessage.value = '当前对战已结束或非活动状态，无需退出。';
+      ElMessage.info(feedbackMessage.value);
+      return;
+    }
+
+    isLoading.value = true;
+    try {
+      const response = await abortBattle(currentGame.value.id);
+      currentGame.value = response; // Update with the aborted battle state
+      currentQuestion.value = ''; // Clear question
+      score.value = response.score; // Update score (might be unchanged or reset by backend)
+      gameOver.value = true; // Mark game as over
+      feedbackMessage.value = '对战已成功中止。';
+      ElMessage.success(feedbackMessage.value);
+    } catch (error) {
+      console.error('Error exiting game:', error);
+      feedbackMessage.value = error.message || '退出对战失败';
+      ElMessage.error(feedbackMessage.value);
+      // Depending on error, gameOver might not be set to true, 
+      // or it might be set if server confirms it's already over.
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
   return {
     currentGame,
     currentQuestion,
@@ -98,6 +130,7 @@ export const useGameStore = defineStore('game', () => {
     score,
     startGame,
     submitAnswer,
-    resetGame
+    resetGame,
+    exitGame
   };
 }); 

@@ -17,7 +17,7 @@ from . import schemas, auth
 from .models import User, Battle, Season, Poetry, UserFavoritePoetry
 from .core.init_db import init_poetry_data, init_season_data
 import random
-from .schemas.battle import BattleCreate, BattleResponse, ChainSubmitRequest, ChainSubmitResponse
+from .schemas.battle import BattleCreate, BattleResponse, ChainSubmitRequest, ChainSubmitResponse, BattleUpdate
 from .crud.battle import get_active_battle, get_battle
 
 # 配置日志
@@ -673,6 +673,41 @@ async def submit_battle_answer(
         updated_battle_state=BattleResponse.model_validate(battle),
         current_round_record=final_round_record_obj
     )
+
+@app.post("/api/v1/battles/{battle_id}/abort", response_model=BattleResponse, tags=["Battle Modes"])
+async def abort_battle(
+    battle_id: int,
+    current_user: User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    battle = get_battle(db, battle_id=battle_id)
+    if not battle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Battle not found.")
+    
+    if battle.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to abort this battle.")
+
+    if battle.status != "active":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Battle cannot be aborted. Current status: {battle.status}.")
+
+    battle.status = "aborted"
+    battle.current_question = None
+    battle.expected_answer = None 
+    # Optionally, you might want to record this action in battle_records if needed
+    # battle.battle_records.append({
+    #     "round_num": battle.current_round_num, 
+    #     "action": "aborted_by_user", 
+    #     "timestamp": datetime.utcnow().isoformat()
+    # })
+    # Ensure battle_records is a list if you append like this
+    # if not isinstance(battle.battle_records, list):
+    #     battle.battle_records = []
+
+    db.add(battle)
+    db.commit()
+    db.refresh(battle)
+    logger.info(f"Battle {battle.id} for user {current_user.id} was aborted by the user.")
+    return battle
 
 # Helper function to parse poem content into lines
 def parse_poem_lines(content: str) -> List[str]:
