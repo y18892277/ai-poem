@@ -134,23 +134,36 @@ const fetchRankings = async () => {
 // 获取赛季列表
 const fetchSeasons = async () => {
   try {
-    const response = await fetch('/api/v1/seasons')
-    const data = await response.json()
+    const response = await fetch('/api/v1/seasons'); 
+    if (!response.ok) {
+      throw new Error(`获取赛季数据失败: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json();
     
-    if (data.success) {
-      seasons.value = data
+    if (Array.isArray(data)) {
+      seasons.value = data;
       if (seasons.value.length > 0) {
-        selectedSeason.value = seasons.value[0].id
-        fetchRankings()
+        const activeSeason = seasons.value.find(s => s.status === 'active');
+        if (activeSeason) {
+            selectedSeason.value = activeSeason.id;
+        } else if (seasons.value.length > 0) {
+            selectedSeason.value = seasons.value[0].id;
+        }
+        if (selectedSeason.value) {
+            fetchRankings();
+        }
+      } else {
+        ElMessage.info('暂无赛季数据');
       }
     } else {
-      ElMessage.error('获取赛季数据失败')
+      console.error('获取到的赛季数据格式不正确:', data);
+      ElMessage.error('获取到的赛季数据格式不正确');
     }
   } catch (error) {
-    console.error('获取赛季数据出错：', error)
-    ElMessage.error('获取赛季数据出错')
+    console.error('获取赛季数据出错 (catch block)：', error);
+    ElMessage.error(error.message || '获取赛季数据时发生网络或解析错误');
   }
-}
+};
 
 // 根据胜率返回不同的颜色
 const getWinRateColor = (winRate) => {

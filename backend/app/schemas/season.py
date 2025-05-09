@@ -4,8 +4,8 @@ from typing import Optional
 
 class SeasonBase(BaseModel):
     name: str
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
     status: Optional[str] = "upcoming"  # upcoming, active, completed
 
 class SeasonCreate(SeasonBase):

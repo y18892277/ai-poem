@@ -395,7 +395,8 @@ def check_poetry_chain_valid(poetry1: str, poetry2: str) -> tuple[bool, str]:
     return False, "无效接龙"
 
 # 获取赛季列表
-@app.get("/api/v1/seasons", response_model=List[schemas.Season])
+@app.get("/api/v1/seasons", response_model=List[schemas.Season], tags=["Rankings", "Seasons"])
+@app.get("/v1/seasons", response_model=List[schemas.Season], include_in_schema=False)
 async def get_seasons(db: Session = Depends(get_db)):
     try:
         seasons = db.query(Season).all()
@@ -405,7 +406,8 @@ async def get_seasons(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="获取赛季列表失败")
 
 # 获取排行榜
-@app.get("/api/v1/rankings")
+@app.get("/api/v1/rankings", tags=["Rankings", "Seasons"])
+@app.get("/v1/rankings", include_in_schema=False)
 async def get_rankings(
     season: Optional[int] = None,
     page: int = 1,
@@ -421,8 +423,8 @@ async def get_rankings(
             User.avatar,
             func.sum(Battle.score).label('score'),
             func.count(Battle.id).label('totalBattles'),
-            func.sum(case([(Battle.status == 'win', 1)], else_=0)).label('winCount'),
-            func.sum(case([(Battle.status == 'lose', 1)], else_=0)).label('loseCount')
+            func.sum(case((Battle.status == 'win', 1), else_=0)).label('winCount'),
+            func.sum(case((Battle.status == 'lose', 1), else_=0)).label('loseCount')
         ).join(Battle, User.id == Battle.user_id)
 
         # 如果指定了赛季，添加赛季过滤

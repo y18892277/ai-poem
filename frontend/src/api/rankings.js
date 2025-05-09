@@ -25,7 +25,7 @@ export const getRankings = async ({ seasonId, page = 1, pageSize = 10 }) => {
 // 获取赛季列表
 export const getSeasons = async () => {
   const { data } = await request({
-    url: '/api/seasons',
+    url: '/api/v1/seasons',
     method: 'get'
   })
   return data
