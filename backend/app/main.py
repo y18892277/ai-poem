@@ -547,7 +547,7 @@ async def submit_battle_answer(
     current_user: User = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    battle = get_battle(db, battle_id=battle_id) # from crud.battle
+    battle = get_battle(db, battle_id=battle_id)
     if not battle:
         raise HTTPException(status_code=404, detail="Battle not found.")
     if battle.user_id != current_user.id:
@@ -559,82 +559,70 @@ async def submit_battle_answer(
     user_answer_cleaned = clean_poem_line(user_answer_raw)
     is_correct_answer = False
     message = ""
-    next_q_for_normal = None
-    ai_next_line_for_smart = None
+    # next_q_for_normal is effectively battle.current_question for the *next* round
+    # ai_next_line_for_smart is effectively battle.current_question for the *next* round in smart mode
     points_this_round = 0
     
-    # Find the existing round record for the current round to update it with user's answer
-    # This assumes the record was created when the question was presented in the start_battle or previous submit.
-    # If battle_records is empty or last record is not for current_round_num, it means something is off
-    # or it's the very first question of a multi-question-per-round system (not our case here)
-    current_round_record_dict = None
-    if battle.battle_records and isinstance(battle.battle_records, list):
-        # Find the record for the current round to update it
-        # If a round record for current_round_num was already added when question was set,
-        # we update it. Otherwise, we create a new one.
-        # For simplicity, let's assume a round_record is made per submit cycle.
-        pass # Will create a new full record below
-
-    # Initialize data for the current round record
     round_data_for_append = {
         "round_num": battle.current_round_num,
-        "question": battle.current_question,
+        "question": battle.current_question, # Question for the round being submitted
         "user_answer": user_answer_raw,
-        "is_correct": False, # Default to False
+        "is_correct": False, 
         "ai_judgement": None,
         "points_awarded": 0
     }
 
     if battle.battle_type == "normal_chain":
         if not battle.expected_answer:
-            # This case should ideally not happen if a question is active
             logger.error(f"Normal chain battle {battle.id} has no expected_answer for question '{battle.current_question}'")
-            raise HTTPException(status_code=500, detail="Error in battle state: no expected answer.")
+            # This might happen if a poem ends and expected_answer was set to None, 
+            # but the logic for continuous random poems should prevent this specific state 
+            # from being the primary check after the first round.
+            # For now, let's assume if expected_answer is None, it's an error for continuous mode before a new Q is set.
+            # However, the original design for single poem did have expected_answer=None for the last line.
+            # For this new continuous mode, every active round *must* have an expected_answer.
+            raise HTTPException(status_code=500, detail="Error in battle state: no expected answer for normal chain.")
         
         expected_answer_cleaned = clean_poem_line(battle.expected_answer)
         
         if user_answer_cleaned == expected_answer_cleaned:
             is_correct_answer = True
             message = "回答正确！"
-            points_this_round = 10 # Example points
+            points_this_round = 10 
             battle.score += points_this_round
             
-            current_poem = db.query(Poetry).filter(Poetry.id == battle.current_poetry_id).first()
-            if not current_poem:
-                message += " 但未能加载诗词信息。游戏结束。"
-                battle.status = "completed_win" # Or an error status
-            else:
-                lines = parse_poem_lines(current_poem.content)
-                try:
-                    # Find index of the just-answered `battle.expected_answer`
-                    idx_of_last_correct_answer = lines.index(battle.expected_answer)
-                    
-                    if idx_of_last_correct_answer + 1 < len(lines):
-                        # Next line becomes the new question
-                        next_q_for_normal = lines[idx_of_last_correct_answer + 1]
-                        if idx_of_last_correct_answer + 2 < len(lines):
-                            # And the line after that is the new expected answer
-                            battle.expected_answer = lines[idx_of_last_correct_answer + 2]
-                        else:
-                            # Only one line left, it is the question, no more expected answer for *next* round
-                            battle.expected_answer = None # This means after user answers next_q_for_normal, poem ends
-                    else:
-                        # Poem completed with this correct answer
-                        message += " 恭喜！你已完成这首诗的接龙！"
-                        battle.status = "completed_win"
-                        next_q_for_normal = None # No next question
-                        battle.expected_answer = None
-                except ValueError:
-                    message += " 但在寻找下一句时出现内部错误。游戏结束。"
-                    battle.status = "completed_win" # Or an error status
-        else:
+            # --- New logic for continuous random poems --- 
+            new_question_generated = False
+            for _ in range(5): # Try a few times to get a valid new poem
+                new_random_poetry = db.query(Poetry).order_by(func.random()).first()
+                if new_random_poetry and new_random_poetry.content:
+                    new_lines = parse_poem_lines(new_random_poetry.content)
+                    if len(new_lines) >= 2:
+                        battle.current_question = new_lines[0]
+                        battle.expected_answer = new_lines[1]
+                        battle.current_poetry_id = new_random_poetry.id
+                        new_question_generated = True
+                        break 
+            
+            if not new_question_generated:
+                # Could not find a suitable new poem/question after retries
+                message += " 系统暂时没有更多题目了，恭喜你完成了本次挑战！"
+                battle.status = "completed_win" # User wins as system can't provide more questions
+                battle.current_question = None # Clear question as game is over
+                battle.expected_answer = None
+            # --- End of new logic --- 
+
+        else: # Answer is incorrect
             is_correct_answer = False
             message = f"回答错误。正确答案应为：{battle.expected_answer}"
-            points_this_round = -5 # Example penalty
+            points_this_round = -5 
             battle.score = max(0, battle.score + points_this_round)
             battle.status = "completed_lose"
+            battle.current_question = None # Clear question as game is over
+            battle.expected_answer = None
 
     elif battle.battle_type == "smart_chain":
+        # Smart chain logic remains the same
         ai_is_correct, ai_message = await check_ai_poetry_chain(battle.current_question, user_answer_raw, db=db)
         is_correct_answer = ai_is_correct
         message = ai_message
@@ -647,39 +635,31 @@ async def submit_battle_answer(
             if not ai_next_line_for_smart:
                 message += " AI已词穷，恭喜你获胜！"
                 battle.status = "completed_win"
+                battle.current_question = None # Clear question
+            else:
+                battle.current_question = ai_next_line_for_smart
         else:
             points_this_round = -7
             battle.score = max(0, battle.score + points_this_round)
             battle.status = "completed_lose"
+            battle.current_question = None # Clear question
     
     round_data_for_append["is_correct"] = is_correct_answer
     round_data_for_append["points_awarded"] = points_this_round
     
     battle.rounds += 1
-    # Ensure battle_records is a list before appending
     if not isinstance(battle.battle_records, list):
         battle.battle_records = []
     battle.battle_records.append(round_data_for_append)
 
     if battle.status == "active":
         battle.current_round_num += 1
-        if battle.battle_type == "normal_chain":
-            battle.current_question = next_q_for_normal 
-            # If next_q_for_normal is None, it means game ended (win/loss handled above)
-            if not battle.current_question: # Game ended
-                 if battle.status == "active": # Should have been set to win/loss already
-                    message = message.replace("回答正确！","") + "诗词已尽，挑战成功！"
-                    battle.status = "completed_win"
-        elif battle.battle_type == "smart_chain":
-            if ai_next_line_for_smart:
-                battle.current_question = ai_next_line_for_smart
-            elif is_correct_answer: # AI was correct but AI has no next line
-                if battle.status == "active": battle.status = "completed_win"
-            # If AI was incorrect, status is already completed_lose
-    else: # Game has ended (completed_win or completed_lose)
+        # For normal_chain, current_question and expected_answer are already updated if correct
+        # For smart_chain, current_question is already updated if AI can respond
+    else: 
         logger.info(f"Battle {battle.id} ended. Status: {battle.status}, Score: {battle.score}")
 
-    db.add(battle) # Use add for SQLAlchemy to track changes before commit
+    db.add(battle) 
     db.commit()
     db.refresh(battle)
 
