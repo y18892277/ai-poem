@@ -11,7 +11,7 @@
  Target Server Version : 80037 (8.0.37)
  File Encoding         : 65001
 
- Date: 09/05/2025 09:19:47
+ Date: 09/05/2025 14:30:20
 */
 
 SET NAMES utf8mb4;
@@ -27,9 +27,12 @@ CREATE TABLE `battles`  (
   `season_id` int NOT NULL,
   `score` int NULL DEFAULT NULL,
   `status` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL DEFAULT NULL,
+  `battle_type` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  `current_question` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL DEFAULT NULL,
+  `expected_answer` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL DEFAULT NULL,
   `current_poetry_id` int NULL DEFAULT NULL,
   `rounds` int NULL DEFAULT NULL,
-  `current_round` int NULL DEFAULT NULL,
+  `current_round_num` int NULL DEFAULT NULL,
   `battle_records` json NULL,
   `total_time` int NULL DEFAULT NULL,
   `avg_response_time` float NULL DEFAULT NULL,
@@ -43,15 +46,27 @@ CREATE TABLE `battles`  (
   CONSTRAINT `battles_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT `battles_ibfk_2` FOREIGN KEY (`season_id`) REFERENCES `seasons` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT `battles_ibfk_3` FOREIGN KEY (`current_poetry_id`) REFERENCES `poetry` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 5 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 17 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = Dynamic;
 
 -- ----------------------------
 -- Records of battles
 -- ----------------------------
-INSERT INTO `battles` VALUES (1, 1, 1, 0, 'active', NULL, 0, 1, '{}', 0, 0, '2025-05-09 00:39:55', '2025-05-09 00:39:55');
-INSERT INTO `battles` VALUES (2, 1, 1, 0, 'active', NULL, 0, 1, '{}', 0, 0, '2025-05-09 00:40:08', '2025-05-09 00:40:08');
-INSERT INTO `battles` VALUES (3, 1, 1, 0, 'active', NULL, 0, 1, '{}', 0, 0, '2025-05-09 00:40:10', '2025-05-09 00:40:10');
-INSERT INTO `battles` VALUES (4, 1, 1, 0, 'active', NULL, 0, 1, '{}', 0, 0, '2025-05-09 00:42:14', '2025-05-09 00:42:14');
+INSERT INTO `battles` VALUES (1, 2, 1, 0, 'aborted', 'normal_chain', '风急天高猿啸哀', '渚清沙白鸟飞回', 7, 0, 1, '[{\"question\": \"风急天高猿啸哀\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 12:35:23', '2025-05-09 12:35:33');
+INSERT INTO `battles` VALUES (2, 2, 1, 20, 'completed_win', 'normal_chain', '无边落木萧萧下', NULL, 7, 2, 2, '[{\"question\": \"风急天高猿啸哀\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 12:35:33', '2025-05-09 12:35:54');
+INSERT INTO `battles` VALUES (3, 2, 1, 0, 'completed_lose', 'normal_chain', '碧玉妆成一树高', '万条垂下绿丝绦', 6, 1, 1, '[{\"question\": \"碧玉妆成一树高\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 12:37:44', '2025-05-09 12:37:49');
+INSERT INTO `battles` VALUES (4, 2, 1, 20, 'completed_win', 'normal_chain', '举头望明月', NULL, 1, 2, 2, '[{\"question\": \"床前明月光\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 12:43:45', '2025-05-09 12:43:57');
+INSERT INTO `battles` VALUES (5, 2, 1, 0, 'completed_lose', 'normal_chain', '空山新雨后', '天气晚来秋', 9, 1, 1, '[{\"question\": \"空山新雨后\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 12:46:47', '2025-05-09 12:46:52');
+INSERT INTO `battles` VALUES (6, 2, 1, 0, 'active', 'normal_chain', '空山不见人', '但闻人语响', 10, 0, 1, '[{\"question\": \"空山不见人\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 12:46:54', '2025-05-09 12:46:54');
+INSERT INTO `battles` VALUES (7, 1, 1, 75, 'completed_lose', 'normal_chain', NULL, NULL, 10, 9, 9, '[{\"question\": \"床前明月光\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 12:52:07', '2025-05-09 13:11:38');
+INSERT INTO `battles` VALUES (8, 1, 1, 10, 'aborted', 'normal_chain', '风急天高猿啸哀', '渚清沙白鸟飞回', 7, 1, 2, '[{\"question\": \"床前明月光\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 13:30:35', '2025-05-09 13:35:33');
+INSERT INTO `battles` VALUES (9, 1, 1, 10, 'aborted', 'normal_chain', '日照香炉生紫烟', '遥看瀑布挂前川', 4, 1, 2, '[{\"question\": \"红豆生南国\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 13:35:33', '2025-05-09 13:39:24');
+INSERT INTO `battles` VALUES (10, 1, 1, 0, 'aborted', 'normal_chain', NULL, NULL, 4, 0, 1, '[{\"question\": \"日照香炉生紫烟\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 13:39:24', '2025-05-09 13:39:25');
+INSERT INTO `battles` VALUES (11, 1, 1, 0, 'aborted', 'normal_chain', NULL, NULL, 9, 0, 1, '[{\"question\": \"空山新雨后\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 13:39:31', '2025-05-09 13:39:33');
+INSERT INTO `battles` VALUES (12, 1, 1, 0, 'aborted', 'normal_chain', NULL, NULL, 9, 0, 1, '[{\"question\": \"空山新雨后\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 13:42:48', '2025-05-09 13:42:51');
+INSERT INTO `battles` VALUES (13, 1, 1, 0, 'aborted', 'normal_chain', '红豆生南国', '春来发几枝', 8, 0, 1, '[{\"question\": \"红豆生南国\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 13:43:59', '2025-05-09 13:44:24');
+INSERT INTO `battles` VALUES (14, 1, 1, 0, 'aborted', 'normal_chain', NULL, NULL, 10, 0, 1, '[{\"question\": \"空山不见人\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 13:44:24', '2025-05-09 13:44:25');
+INSERT INTO `battles` VALUES (15, 1, 1, 0, 'aborted', 'normal_chain', '空山新雨后', '天气晚来秋', 9, 0, 1, '[{\"question\": \"空山新雨后\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 13:44:33', '2025-05-09 13:44:40');
+INSERT INTO `battles` VALUES (16, 1, 1, 0, 'active', 'normal_chain', '空山不见人', '但闻人语响', 10, 0, 1, '[{\"question\": \"空山不见人\", \"round_num\": 1, \"is_correct\": null, \"user_answer\": null, \"ai_judgement\": null, \"points_awarded\": 0}]', 0, 0, '2025-05-09 13:44:40', '2025-05-09 13:44:40');
 
 -- ----------------------------
 -- Table structure for poetry
@@ -157,11 +172,12 @@ CREATE TABLE `users`  (
   UNIQUE INDEX `username`(`username` ASC) USING BTREE,
   UNIQUE INDEX `email`(`email` ASC) USING BTREE,
   INDEX `ix_users_id`(`id` ASC) USING BTREE
-) ENGINE = InnoDB AUTO_INCREMENT = 2 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 3 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = Dynamic;
 
 -- ----------------------------
 -- Records of users
 -- ----------------------------
 INSERT INTO `users` VALUES (1, 'y123', '937670285@qq.com', '$2b$12$NV7yBulRkAV8Q3zHIe3zpuL9V.i.5NumdKCdg8Qu.UhasWpQy/42G', 'chen', NULL, 1, 0, 0, 0, 0, 0, 0, 0, 0, '新手', 0, 0, '2025-05-09 00:39:45', '2025-05-09 00:39:45');
+INSERT INTO `users` VALUES (2, 'z123', '3422136365@qq.com', '$2b$12$XqPZf2Da0yn3jvbtyN.jMuxutpK.N1q76D7ZeScvuzPgeO1H24mOK', 'y', NULL, 1, 0, 0, 0, 0, 0, 0, 0, 0, '新手', 0, 0, '2025-05-09 12:16:50', '2025-05-09 12:16:50');
 
 SET FOREIGN_KEY_CHECKS = 1;
