@@ -100,10 +100,3 @@ class PoetryListResponse(BaseModel):
 
     class Config:
         from_attributes = True
-
-class PoetryFavoriteResponse(BaseModel):
-    success: bool
-    message: str
-
-    class Config:
-        from_attributes = True 

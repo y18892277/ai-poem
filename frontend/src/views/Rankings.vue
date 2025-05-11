@@ -4,14 +4,17 @@
       <template #header>
         <div class="card-header">
           <h2>诗词擂台排行榜</h2>
-          <el-select v-model="selectedSeason" placeholder="选择赛季" @change="fetchRankings">
-            <el-option
-              v-for="season in seasons"
-              :key="season.id"
-              :label="season.name"
-              :value="season.id"
-            />
-          </el-select>
+          <div class="header-actions">
+            <el-select v-model="selectedSeason" placeholder="选择赛季" @change="fetchRankings" style="margin-right: 10px;">
+              <el-option
+                v-for="season in seasons"
+                :key="season.id"
+                :label="season.name"
+                :value="season.id"
+              />
+            </el-select>
+            <el-button type="primary" @click="handleCreateNewSeason">创建新赛季</el-button>
+          </div>
         </div>
       </template>
 
@@ -165,6 +168,41 @@ const fetchSeasons = async () => {
   }
 };
 
+// 新增：创建新赛季的处理函数
+const handleCreateNewSeason = async () => {
+  try {
+    loading.value = true; // 可以用一个独立的loading状态，或者共用
+    const response = await fetch('/api/v1/seasons', {
+      method: 'POST',
+      headers: {
+        // 如果需要认证，请添加 Authorization header
+        // 'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        'Content-Type': 'application/json'
+      },
+      // body: JSON.stringify({}) // POST请求通常需要body，但此接口设计为不需要
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: '创建新赛季失败，请稍后再试' }));
+      throw new Error(errorData.detail || `创建新赛季失败: ${response.status}`);
+    }
+
+    const newSeason = await response.json();
+    ElMessage.success(`新赛季 "${newSeason.name}" 创建成功并已激活！`);
+    
+    // 刷新赛季列表并选中新赛季
+    await fetchSeasons(); // fetchSeasons 内部会自动选中 active 的赛季
+    // selectedSeason.value = newSeason.id; // fetchSeasons 应该会处理这个
+    // fetchRankings(); // fetchSeasons 内部在选中赛季后会调用 fetchRankings
+
+  } catch (error) {
+    console.error('创建新赛季出错：', error);
+    ElMessage.error(error.message || '创建新赛季时发生错误');
+  } finally {
+    loading.value = false;
+  }
+};
+
 // 根据胜率返回不同的颜色
 const getWinRateColor = (winRate) => {
   if (winRate >= 80) return '#67C23A'
@@ -209,6 +247,11 @@ onMounted(() => {
   margin: 0;
   font-size: 20px;
   color: #303133;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
 }
 
 .user-info {

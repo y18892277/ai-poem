@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, desc
-from datetime import timedelta
+from datetime import timedelta, datetime
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.openapi.utils import get_openapi
 from typing import List, Optional, Tuple, Dict, Any
@@ -404,6 +404,44 @@ async def get_seasons(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error getting seasons: {str(e)}")
         raise HTTPException(status_code=500, detail="获取赛季列表失败")
+
+# 新增：创建新赛季
+@app.post("/api/v1/seasons", response_model=schemas.Season, tags=["Rankings", "Seasons"])
+async def create_new_season(db: Session = Depends(get_db)):
+    try:
+        # 1. 将所有现有赛季状态更新为 "inactive"
+        db.query(Season).filter(Season.status == "active").update({"status": "inactive"}, synchronize_session="fetch")
+        
+        # 2. 确定新赛季的名称
+        last_season = db.query(Season).order_by(Season.id.desc()).first()
+        new_season_number = (last_season.id + 1) if last_season else 1
+        new_season_name = f"赛季 {new_season_number}"
+        # 检查名称是否已存在，如果存在则尝试递增数字直到不重复 (简单处理)
+        name_exists = db.query(Season).filter(Season.name == new_season_name).first()
+        while name_exists:
+            new_season_number +=1
+            new_season_name = f"赛季 {new_season_number}"
+            name_exists = db.query(Season).filter(Season.name == new_season_name).first()
+
+        # 3. 创建新赛季
+        start_date = datetime.utcnow()
+        end_date = start_date + timedelta(days=30) # 默认一个月
+        
+        new_season = Season(
+            name=new_season_name,
+            start_date=start_date,
+            end_date=end_date,
+            status="active"
+        )
+        db.add(new_season)
+        db.commit()
+        db.refresh(new_season)
+        logger.info(f"New season '{new_season.name}' created and activated.")
+        return new_season
+    except Exception as e:
+        db.rollback() # 如果出错则回滚
+        logger.error(f"Error creating new season: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"创建新赛季失败: {str(e)}")
 
 # 获取排行榜
 @app.get("/api/v1/rankings", tags=["Rankings", "Seasons"])
