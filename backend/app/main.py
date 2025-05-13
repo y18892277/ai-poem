@@ -16,6 +16,8 @@ from .core.init_database import init_database
 from . import schemas, auth
 from .models import User, Battle, Season, Poetry, UserFavoritePoetry
 from .core.init_db import init_poetry_data, init_season_data
+from . import llm_service
+from .llm_service import judge_user_line_by_ai, get_ai_response_to_line
 import random
 from .schemas.battle import BattleCreate, BattleResponse, ChainSubmitRequest, ChainSubmitResponse, BattleUpdate
 from .crud.battle import get_active_battle, get_battle
@@ -283,17 +285,51 @@ async def start_battle_endpoint(
         )
 
     elif battle_create.battle_type == "smart_chain":
-        ai_line = await get_ai_starting_line(db=db)
-        if not ai_line:
-            raise HTTPException(status_code=500, detail="AI failed to provide a starting line.")
-        new_battle_data["current_question"] = ai_line
-        # Record initial state for the first round
-        new_battle_data["battle_records"].append(
-            schemas.RoundRecord(
-                round_num=1, 
-                question=ai_line
-            ).model_dump()
-        )
+        # 智能接龙模式
+        logger.info("Entering smart_chain battle type logic.")
+        try:
+            if not hasattr(llm_service, 'get_ai_starting_line'):
+                logger.error("llm_service module loaded, but get_ai_starting_line function is missing!")
+                raise HTTPException(status_code=500, detail="AI服务组件配置错误。")
+
+            logger.info("Attempting to call llm_service.get_ai_starting_line...")
+            ai_starting_line = llm_service.get_ai_starting_line(db)
+            logger.info(f"llm_service.get_ai_starting_line returned: {'<empty_or_None>' if not ai_starting_line else str(ai_starting_line)[:50]}")
+
+            if not ai_starting_line:
+                logger.error("Failed to get starting line from AI for smart_chain (returned empty/None).")
+                raise HTTPException(status_code=503, detail="AI未能提供开场诗句，请稍后再试。")
+            
+            # 后续使用 ai_starting_line 的逻辑...
+            # 例如: new_battle_data["current_question"] = ai_starting_line
+            # (确保此处的逻辑与之前一致或适配)
+            # ...
+            # 确保将 ai_starting_line 添加到 new_battle_data 中
+            new_battle_data["current_question"] = ai_starting_line
+            new_battle_data["expected_answer"] = None # AI出题，用户回答，所以初始没有expected_answer
+            new_battle_data["current_poetry_id"] = None # 如果AI出题非库中，则为空
+
+            # 为 AI 的第一个问题添加初始回合记录
+            # 确保 battle_records 已经作为列表在 new_battle_data 中初始化
+            new_battle_data["battle_records"].append(
+                schemas.RoundRecord(
+                    round_num=new_battle_data["current_round_num"], # 应该是1
+                    question=ai_starting_line,
+                    user_answer=None,
+                    is_correct=None, # 初始AI出题，无对错判断
+                    ai_judgement="AI出题", # 可以记录这是AI出的题
+                    points_awarded=0
+                ).model_dump()
+            )
+
+        except HTTPException as http_exc:
+            raise http_exc
+        except AttributeError as attr_err:
+            logger.error(f"AttributeError when trying to use llm_service: {str(attr_err)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="AI服务组件未能正确加载。")
+        except Exception as e_main_llm_call:
+            logger.error(f"CRITICAL UNHANDLED ERROR in smart_chain logic: {type(e_main_llm_call).__name__} - {str(e_main_llm_call)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="智能接龙服务发生严重内部错误。")
     else:
         raise HTTPException(status_code=400, detail="Invalid battle_type specified.")
 
@@ -662,8 +698,9 @@ async def submit_battle_answer(
             battle.expected_answer = None
 
     elif battle.battle_type == "smart_chain":
-        # Smart chain logic remains the same
-        ai_is_correct, ai_message = await check_ai_poetry_chain(battle.current_question, user_answer_raw, db=db)
+        # Smart chain logic
+        # ai_is_correct, ai_message = await check_ai_poetry_chain(battle.current_question, user_answer_raw, db=db) # <--- 注释或删除错误的调用
+        ai_is_correct, ai_message = await judge_user_line_by_ai(battle.current_question, user_answer_raw, db=db) # <--- 使用新的正确函数
         is_correct_answer = ai_is_correct
         message = ai_message
         round_data_for_append["ai_judgement"] = ai_message
@@ -671,7 +708,8 @@ async def submit_battle_answer(
         if is_correct_answer:
             points_this_round = 15
             battle.score += points_this_round
-            ai_next_line_for_smart = await get_ai_response_to_line(user_answer_raw, db=db)
+            # ai_next_line_for_smart = await get_ai_response_to_line(user_answer_raw, db=db) # <--- 修改这里
+            ai_next_line_for_smart = llm_service.get_ai_response_to_line(user_answer_raw, db=db) # <---确保通过模块名调用，如果未单独导入
             if not ai_next_line_for_smart:
                 message += " AI已词穷，恭喜你获胜！"
                 battle.status = "completed_win"

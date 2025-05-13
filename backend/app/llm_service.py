@@ -1,38 +1,34 @@
 import os
-from zhipuai import ZhipuAI
+import requests # 保留导入
+# from openai import OpenAI # 移除导入
 from .core.config import settings
 import logging
 import re
 from sqlalchemy.orm import Session # 导入 Session
 from .models import Poetry # 导入 Poetry 模型
 # from .core.database import get_db # 暂时不需要在这里获取db，由调用方传入
-from typing import Optional
+from typing import Optional, List, Set
+from pypinyin import lazy_pinyin, Style # <--- 新增导入
 
-print("!!!!!!!!!!!! LLM_SERVICE.PY WAS LOADED BY PYTHON !!!!!!!!!!!!")
+print("########## llm_service.py TOP LEVEL CHECKPOINT 1 ##########") # 新增顶层打印
 
-logger = logging.getLogger(__name__)
+# 确保logging配置在模块级别尽早生效，以捕获可能的早期问题
+logging.basicConfig(level=logging.INFO) # 可以考虑在这里也配置一下，尽管main.py也有
+logger = logging.getLogger(__name__) # logger获取应该在basicConfig之后
 
-# 全局客户端实例
-llm_client: Optional[ZhipuAI] = None # 明确类型
-MAX_RETRIES = 3 # 定义最大重试次数
+print("########## llm_service.py TOP LEVEL CHECKPOINT 2 - Logger configured ##########") # 新增顶层打印
 
-def get_llm_client() -> Optional[ZhipuAI]: # 返回 Optional[ZhipuAI]
-    """获取或初始化智谱AI客户端 (同步)"""
-    # print("!!!!!!!!!!!! GET_LLM_CLIENT FUNCTION ENTERED !!!!!!!!!!!!") # 可以移除这个详细打印
-    global llm_client
-    if llm_client is None:
-        api_key = settings.LLM_API_KEY
-        if not api_key:
-            logger.warning("LLM_API_KEY not found. LLM features will be disabled.")
-            return None
-        try:
-            llm_client = ZhipuAI(api_key=api_key)
-            logger.info("ZhipuAI client initialized successfully.")
-        except Exception as e:
-            logger.error(f"Failed to initialize ZhipuAI client: {e}", exc_info=True)
-            llm_client = None # 确保失败时client为None
-            return None
-    return llm_client
+MAX_RETRIES = 3
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions" # 和test.py一致
+
+def get_deepseek_api_key() -> Optional[str]: # 函数名和职责变更
+    """获取DeepSeek API Key"""
+    api_key = settings.DEEPSEEK_API_KEY
+    if not api_key:
+        logger.warning("DEEPSEEK_API_KEY not found in settings. LLM features will be disabled.")
+        return None
+    logger.info("DEEPSEEK_API_KEY found in settings.")
+    return api_key
 
 def _clean_line(line: str) -> str:
     """
@@ -43,8 +39,8 @@ def _clean_line(line: str) -> str:
         return ""
 
     # 1. 尝试移除括号及其内容（包括中文和英文圆括号、方括号、花括号）
-    line = re.sub(r"[（\\(\\[].*?[）\\)\\]]", "", line) 
-    line = re.sub(r"\\{.*?\\}", "", line)
+    line = re.sub(r"[（\(\[].*?[）\)\]]", "", line) 
+    line = re.sub(r"\{.*?\}", "", line)
 
     # 2. 移除一些常见的前缀和后缀短语
     common_prefixes = [
@@ -64,7 +60,7 @@ def _clean_line(line: str) -> str:
     
     # 3. 移除中英文引号
     line = line.replace('"', '').replace("'", "").replace("`", "")
-    line = line.replace('"', '').replace('"', '').replace('"', '').replace('"', '')
+    line = line.replace('"', '').replace('"', '').replace('"', '').replace('"', '') # 添加中文引号移除
 
     # 4. 提取所有汉字
     cleaned = "".join(re.findall(r'[一-鿿]+', line))
@@ -75,27 +71,17 @@ def _clean_line(line: str) -> str:
     return cleaned.strip()
 
 def is_line_in_db(line: str, db: Session) -> bool:
-    """检查清理后的诗句是否存在于数据库中。会尝试更宽松的匹配以适应数据库中可能存在的标点。"""
     logger.debug(f"[is_line_in_db] Received line for DB check: '{line}'")
     if not line or not db:
         logger.debug("[is_line_in_db] Empty line or no db session, returning False.")
         return False
-
-    # 传入的 line 应该是已经被 _clean_line 清理过的，不含标点和多余空格
-    # 例如: "海内存知己天涯若比邻"
     cleaned_line_for_query = line
-
     if not cleaned_line_for_query:
         logger.debug(f"[is_line_in_db] Cleaned line for query is empty. Original line: '{line}'. Returning False.")
         return False
-
-    # 构建宽松的 LIKE 查询模式，例如: '%海%内%存%知%己%天%涯%若%比%邻%'
-    # 这种模式可以匹配数据库中如 "海内存知己，天涯若比邻。" 这样的内容
     like_pattern = "%" + "%".join(list(cleaned_line_for_query)) + "%"
     logger.debug(f"[is_line_in_db] Constructed LIKE pattern: '{like_pattern}'")
-
     try:
-        # 使用构造的模式进行查询
         exists = db.query(Poetry.id).filter(Poetry.content.like(like_pattern)).limit(1).scalar() is not None
         logger.debug(f"[is_line_in_db] Query result for pattern '{like_pattern}' (original line: '{line}') in DB: {exists}")
         return exists
@@ -103,31 +89,73 @@ def is_line_in_db(line: str, db: Session) -> bool:
         logger.error(f"Database check failed for line '{line}' with pattern '{like_pattern}': {e}", exc_info=True)
         return False
 
-# 同步版本的 get_ai_starting_line
+def get_lazy_pinyin_set(char: str) -> Set[str]:
+    """获取单个汉字所有读音的不带声调拼音集合。"""
+    if not char or not '\u4e00' <= char <= '\u9fff': #确保是单个汉字
+        return set()
+    # 使用NORMAL风格获取所有读音的拼音列表，然后转换为集合
+    pinyin_list = lazy_pinyin(char, style=Style.NORMAL)
+    return set(p for sublist in pinyin_list for p in sublist) # lazy_pinyin返回[[p1],[p2]]或[[p]]
+
+def are_chars_homophones_or_same(char1: str, char2: str) -> bool:
+    """
+    判断两个汉字是否相同，或者它们是否为游戏规则下的同音字（忽略声调）。
+    """
+    if not char1 or not char2 or not '\u4e00' <= char1 <= '\u9fff' or not '\u4e00' <= char2 <= '\u9fff':
+        return False # 不是有效汉字输入
+    if char1 == char2:
+        return True
+    
+    pinyin_set1 = get_lazy_pinyin_set(char1)
+    pinyin_set2 = get_lazy_pinyin_set(char2)
+    
+    # 检查两个拼音集合是否有交集
+    return not pinyin_set1.isdisjoint(pinyin_set2)
+
 def get_ai_starting_line(db: Session) -> Optional[str]:
-    print("!!!!!!!!!!!! get_ai_starting_line (SYNC FULL LOGIC) CALLED !!!!!!!!!!!!")
-    client = get_llm_client()
-    if not client:
-        logger.error("LLM client not available for starting line.")
-        return "抱歉，AI服务暂时不可用。"
+    logger.info("!!!!!!!!!!!! get_ai_starting_line (USING REQUESTS) CALLED !!!!!!!!!!!!")
+    api_key = get_deepseek_api_key()
+    if not api_key:
+        return "抱歉，AI服务API Key未配置。"
 
-    prompt = "请你作为一位精通中国古诗词的诗词大师，提供一个5到7个字的诗词短句作为诗词接龙的开头。这个短语本身必须是某首真实存在的古诗词的一部分，且较为常见、脍炙人口。请直接返回这个诗句本身，不要包含任何其他解释、标题或作者信息。"
-    system_content = "你是一个精通中国古诗词的大师，你需要严格按照要求提供真实的诗词短句。"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    # 基于之前的优化建议修改提示词
+    system_content = (
+        "你是一位顶级中国古诗词专家，你的任务是为诗词接龙游戏提供开场诗句。"
+        "你提供的诗句必须是【真实存在于中国古古诗词中的原句片段】。"
+        "诗句必须是【5到7个汉字】。"
+        "诗句必须是【广为流传、有据可查的经典名句】，这样更容易被大众所知晓。"
+        "你的回答必须【绝对纯净】，【只包含诗句本身的文字内容】，不包含任何诗名、作者、标点、序号、解释或任何其他字符。"
+        "严格遵守上述所有规则。"
+    )
+    prompt_text = "请提供一句适合作为诗词接龙开头的、符合上述所有要求的诗句。"
+    
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt_text}
+        ],
+        "max_tokens": 100,
+        "temperature": 0.6, # 之前讨论过降低此值
+        "stream": False
+    }
 
-    for attempt in range(MAX_RETRIES + 1):
-        logger.info(f"Attempt {attempt + 1}/{MAX_RETRIES + 1} to get and validate starting line (sync).")
+    for attempt in range(MAX_RETRIES + 1): # MAX_RETRIES 可以设为 1 或 2
+        logger.info(f"Attempt {attempt + 1}/{MAX_RETRIES + 1} to get starting line from DeepSeek (requests).")
         try:
-            response = client.chat.completions.create(
-                model="glm-4", 
-                messages=[
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=100,
-                temperature=0.8
-            )
-            if response.choices and response.choices[0].message.content:
-                ai_line_raw = response.choices[0].message.content.strip()
+            logger.info(f"Calling DeepSeek API (requests). URL: {DEEPSEEK_API_URL}, Payload: {str(payload)[:200]}...")
+            response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=15) # 稍微增加单次timeout
+            response.raise_for_status()
+            
+            result = response.json()
+            logger.info(f"DeepSeek API response (requests): {str(result)[:200]}...")
+
+            if result.get('choices') and result['choices'][0].get('message') and result['choices'][0]['message'].get('content'):
+                ai_line_raw = result['choices'][0]['message']['content'].strip()
                 ai_line_cleaned = _clean_line(ai_line_raw)
                 logger.info(f"LLM raw response: '{ai_line_raw}', Cleaned: '{ai_line_cleaned}'")
 
@@ -138,36 +166,46 @@ def get_ai_starting_line(db: Session) -> Optional[str]:
 
                 if is_line_in_db(ai_line_cleaned, db):
                     logger.info(f"Line '{ai_line_cleaned}' FOUND in DB. Returning this line.")
-                    return ai_line_cleaned # 返回清理后的诗句
+                    return ai_line_cleaned
                 else:
                     logger.warning(f"Line '{ai_line_cleaned}' NOT found in DB.")
-                    if attempt < MAX_RETRIES: 
-                        # prompt += f"\n(提示：你上次返回的 '{ai_line_raw}' 清理后为 '{ai_line_cleaned}'，它不在我们的诗词库中，请换一句。)" # 可选：给AI反馈
+                    if attempt < MAX_RETRIES:
+                        # 反馈给AI，让它尝试生成更常见的诗句
+                        payload["messages"].append({"role": "assistant", "content": ai_line_raw}) # 添加AI上一次的回答
+                        payload["messages"].append({"role": "user", "content": "这句诗句很好，但不够广为人知或不在常用诗词库中。请再提供一句【更经典、更常见】的、符合所有原始要求的5-7字开场诗句。"})
                         continue
                     else: 
-                        logger.error(f"Line '{ai_line_cleaned}' not in DB after all retries.")
-                        # 对于初始诗句，如果最终找不到，返回None或错误提示，让main.py处理
-                        return None # 让 main.py 决定如何处理（例如返回503）
+                        logger.error(f"Line '{ai_line_cleaned}' not in DB after all retries. LLM might be returning it, or a very similar one despite feedback.")
+                        # 如果多次重试AI都给不在库中的，可以考虑返回一个预设的或者记录这个情况
+                        # 为了游戏能开始，这里可以考虑返回ai_line_cleaned，即使它不在库中，并标记
+                        # 但当前严格要求在库中，所以返回None或错误
+                        return "抱歉，AI尽力了，但生成的诗句未能在我们的诗词库中得到广泛确认。请稍后再试。"
             else:
-                logger.warning("LLM did not return valid content (choices empty or message content missing).")
+                logger.warning(f"LLM did not return valid content structure. Response: {str(result)[:200]}")
                 if attempt < MAX_RETRIES: continue
                 else: return "抱歉，AI大模型未能生成诗句。"
 
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout during DeepSeek call (Attempt {attempt + 1}) after 15s.", exc_info=True)
+            if attempt == MAX_RETRIES:
+                return "抱歉，连接AI服务超时，请稍后再试。"
+        except requests.exceptions.RequestException as e:
+            logger.error(f"RequestException during DeepSeek call (Attempt {attempt + 1}): {type(e).__name__} - {str(e)}", exc_info=True)
+            if attempt == MAX_RETRIES:
+                return "抱歉，连接AI服务时发生网络错误。"
         except Exception as e:
-            logger.error(f"Exception during LLM call or processing (Attempt {attempt + 1}): {e}", exc_info=True)
+            logger.error(f"Generic exception during DeepSeek call processing (Attempt {attempt + 1}): {type(e).__name__} - {str(e)}", exc_info=True)
             if attempt == MAX_RETRIES:
                 return "抱歉，AI大模型服务暂时出现问题。"
     
-    logger.error("Exhausted all attempts to get a valid starting line (sync). Returning None.")
-    return None # 明确返回None，如果所有尝试都失败了
+    logger.error("Exhausted all attempts to get a valid starting line (requests). Returning None.")
+    return "抱歉，AI多次尝试后仍未能提供合适的开场诗句。"
 
-# 同步版本的 get_ai_response_to_line
 def get_ai_response_to_line(user_line: str, db: Session) -> Optional[str]:
-    print(f"!!!!!!!!!!!! get_ai_response_to_line (SYNC FULL LOGIC) CALLED with user_line: '{user_line}' !!!!!!!!!!!!")
-    client = get_llm_client()
-    if not client:
-        logger.error("LLM client not available for response line.")
-        return None
+    logger.info(f"!!!!!!!!!!!! get_ai_response_to_line (USING REQUESTS) CALLED with user_line: '{user_line}' !!!!!!!!!!!!")
+    api_key = get_deepseek_api_key()
+    if not api_key:
+        return "抱歉，AI服务API Key未配置。"
 
     cleaned_user_line = _clean_line(user_line)
     if not cleaned_user_line:
@@ -175,71 +213,105 @@ def get_ai_response_to_line(user_line: str, db: Session) -> Optional[str]:
         return "您的输入无效，AI无法接龙。"
     
     last_char = cleaned_user_line[-1]
-    
-    # 使用行继续符 \ 来明确地将多行字符串拼接为一个整体赋值给 base_prompt
-    base_prompt = \
-        f"你的任务是进行诗词接龙。上一句的诗句是 '{cleaned_user_line}'，它的最后一个字是 '{last_char}'。\\n" \
-        f"请你接一个以 '{last_char}' 开头的、大约5到7个字的纯粹的诗句。\\n" \
-        "这个诗句必须是某一句较为常见或有据可查的真实古诗词的片段。\\n" \
-        "请沉思片刻，发挥你的文学积累，相信你能找到合适的诗句！\\n\\n" \
-        "重要规则：你的回答必须【仅仅包含诗句本身】，【绝对不能】包含任何其他文字，比如诗名、作者、标点符号、括号、解释、序号或者任何形式的聊天内容！\\n\\n" \
-        "以下是【正确格式】的例子：\\n" \
-        "例1：如果上一句尾字是\"天\"你就直接回答：\"天涯共此时\"\\n" \
-        "例2：如果上一句尾字是\"山\"你就直接回答：\"山色空蒙雨亦奇\"\\n\\n" \
-        f"现在，请接上一句尾字为'{last_char}'的诗句："
-    
-    current_prompt = base_prompt 
-    
-    system_content = "你是一位才华横溢、富有毅力和创造力的中国古诗词接龙大师。你的核心目标是运用你的智慧，让诗词接龙游戏尽可能地持续下去，同时严格遵守接龙规则（约5-7字，真实诗词片段，首字正确，输出内容【绝对纯净，只有诗句文字】）。"
+    # 获取尾字的无声调拼音，用于更明确地指导AI
+    last_char_pinyins = get_lazy_pinyin_set(last_char)
+    pinyin_hint = f"（提示：它的拼音是 '{next(iter(last_char_pinyins))}'，注意寻找同音字哦！）" if last_char_pinyins else ""
 
-    for attempt in range(MAX_RETRIES + 1):
-        logger.info(f"Attempt {attempt + 1}/{MAX_RETRIES + 1} for AI response to '{cleaned_user_line}' (sync). Current prompt: {current_prompt}")
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    # 修改提示词以支持同音字
+    system_content = """你是一位才华横溢、富有创造力的中国古诗词接龙大师。你的核心目标是运用你的智慧，让诗词接龙游戏尽可能地持续下去，同时严格遵守接龙规则。
+
+【重要接龙规则】:
+
+1. 你需要接一个大约【5到7个汉字】的纯粹的诗句。
+
+2. 这个诗句必须是某一句较为常见或有据可查的【真实古诗词的片段】。
+
+3. 你的诗句的【首字】必须与上一句诗词的【尾字】相同，或者是其【同音字】（声调不同也没关系，只要读音相似即可）。
+
+4. 你的回答必须【仅仅包含诗句本身】，【绝对不能】包含任何其他文字，比如诗名、作者、标点符号、括号、解释、序号或者任何形式的聊天内容！
+
+请沉思片刻，发挥你的文学积累，相信你能找到合适的诗句！"""
+    
+    base_prompt_text_template = """上一句的诗句是 '{user_line_placeholder}'，它的最后一个字是 '{last_char_placeholder}'{pinyin_hint_placeholder}。
+
+现在，请你接一句以 '{last_char_placeholder}' 或其【同音字】开头的、符合所有系统指令中重要接龙规则的诗句："""
+    
+    current_prompt_text = base_prompt_text_template.format(
+        user_line_placeholder=cleaned_user_line,
+        last_char_placeholder=last_char,
+        pinyin_hint_placeholder=pinyin_hint
+    )
+
+    for attempt in range(MAX_RETRIES + 1): # MAX_RETRIES 可以设为 1 或 2
+        logger.info(f"Attempt {attempt + 1}/{MAX_RETRIES + 1} for AI response to '{cleaned_user_line}' (requests). Current prompt: {current_prompt_text[:150]}...")
+        
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": current_prompt_text}
+            ],
+            "max_tokens": 50,
+            "temperature": 0.7, # 可以尝试调整
+            "stop": ["\n", "（", "(", "【", "答：", "解：", "。", "！", "？"], # 增加常见标点作为停止符
+            "stream": False
+        }
+        
         try:
-            response = client.chat.completions.create(
-                model="glm-4",
-                messages=[
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": current_prompt}
-                ],
-                max_tokens=50, # 减少 max_tokens，因为我们期望的是短诗句，且防止它说废话
-                temperature=0.75, # 略微降低温度，使其更稳定地遵循格式
-                stop=["\n", "（", "(", "【", "答：", "解："] # 增加 stop 序列，尝试提前终止不必要的后缀
-            )
-            if response.choices and response.choices[0].message.content:
-                ai_line_raw = response.choices[0].message.content.strip()
+            logger.info(f"Calling DeepSeek API for response (requests). URL: {DEEPSEEK_API_URL}, Payload: {str(payload)[:200]}...")
+            response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=15) # 增加timeout
+            response.raise_for_status()
+
+            result = response.json()
+            logger.info(f"DeepSeek API response for AI line (requests): {str(result)[:200]}...")
+
+            if result.get('choices') and result['choices'][0].get('message') and result['choices'][0]['message'].get('content'):
+                ai_line_raw = result['choices'][0]['message']['content'].strip()
                 
-                if "我接不上" in ai_line_raw or "接不上" in ai_line_raw or "无法接龙" in ai_line_raw:
-                    logger.info(f"LLM explicitly stated it cannot chain from '{cleaned_user_line}'. Response: '{ai_line_raw}'")
-                    if attempt == 0 and attempt < MAX_RETRIES:
-                        logger.info("LLM said '我接不上' on first attempt, encouraging a retry.")
-                        current_prompt = base_prompt + "\\n（再努力一下，大师！这对你来说肯定不难。请再试一次，只返回纯诗句。）"
+                if any(phrase in ai_line_raw for phrase in ["我接不上", "接不上", "无法接龙", "抱歉"]):
+                    logger.info(f"LLM explicitly stated it cannot chain. Response: '{ai_line_raw}'")
+                    if attempt < MAX_RETRIES:
+                        # 尝试给更具体的反馈
+                        payload["messages"].append({"role": "assistant", "content": ai_line_raw})
+                        payload["messages"].append({"role": "user", "content": f"再努力一下，大师！这对你来说肯定不难。请严格按照规则，接一个以'{last_char}'或其同音字开头的5-7字纯诗句。"})
+                        current_prompt_text = payload["messages"][-1]["content"] # 更新prompt给下一次尝试
                         continue 
-                    return None
+                    return "抱歉，AI多次尝试后仍表示无法接龙。"
 
                 ai_line_cleaned = _clean_line(ai_line_raw) 
-                logger.info(f"LLM raw response: '{ai_line_raw}', Cleaned by NEW _clean_line: '{ai_line_cleaned}'")
+                logger.info(f"LLM raw response: '{ai_line_raw}', Cleaned: '{ai_line_cleaned}'")
 
                 if not ai_line_cleaned:
-                    logger.warning("LLM returned empty or too short line after cleaning for AI response.")
+                    logger.warning("LLM returned empty or too short line for AI response.")
                     if attempt < MAX_RETRIES:
-                        current_prompt = base_prompt + "\\n（返回的诗句清理后内容太少。请确保返回的是约5-7个汉字的纯诗句部分。）"
+                        payload["messages"].append({"role": "assistant", "content": ai_line_raw})
+                        payload["messages"].append({"role": "user", "content": f"返回的诗句清理后内容太少。请确保返回的是约5-7个汉字的纯诗句部分，且以'{last_char}'或其同音字开头。"})
+                        current_prompt_text = payload["messages"][-1]["content"]
                         continue
-                    else: 
-                        return "抱歉，AI大模型未能生成有效的诗句来接龙。"
+                    else: return "抱歉，AI大模型未能生成有效的诗句来接龙。"
                 
                 if not (4 <= len(ai_line_cleaned) <= 8):
-                    logger.warning(f"AI response '{ai_line_cleaned}' length {len(ai_line_cleaned)} is not between 4 and 8 chars.")
+                    logger.warning(f"AI response '{ai_line_cleaned}' length {len(ai_line_cleaned)} not ideal.")
                     if attempt < MAX_RETRIES:
-                        current_prompt = base_prompt + f"\\n（诗句长度 '{len(ai_line_cleaned)}' 不太符合期望的5-7字。请重新生成一个【纯粹的】5到7个汉字的诗句片段。）"
+                        payload["messages"].append({"role": "assistant", "content": ai_line_raw})
+                        payload["messages"].append({"role": "user", "content": f"诗句长度 '{len(ai_line_cleaned)}' 不太符合期望的5-7字。请重新生成一个以'{last_char}'或其同音字开头的【纯粹的】5到7个汉字的诗句片段。"})
+                        current_prompt_text = payload["messages"][-1]["content"]
                         continue
 
-                if ai_line_cleaned[0].lower() != last_char.lower():
-                    logger.warning(f"AI response '{ai_line_cleaned}' (first char: {ai_line_cleaned[0]}) does not start with expected char '{last_char}'.")
+                # 使用新的同音字判断逻辑
+                if not are_chars_homophones_or_same(ai_line_cleaned[0], last_char):
+                    logger.warning(f"AI response '{ai_line_cleaned}' (first char: {ai_line_cleaned[0]}) does not start with expected char '{last_char}' or its homophone.")
                     if attempt < MAX_RETRIES:
-                        current_prompt = base_prompt + f"\\n（首字 '{ai_line_cleaned[0]}' 不对哦！必须是以 '{last_char}' 开头的纯诗句。再想想看。）"
+                        payload["messages"].append({"role": "assistant", "content": ai_line_raw})
+                        payload["messages"].append({"role": "user", "content": f"首字 '{ai_line_cleaned[0]}' 不对哦！必须是以 '{last_char}' 或其同音字开头的纯诗句。再想想看。"})
+                        current_prompt_text = payload["messages"][-1]["content"]
                         continue
-                    else: 
-                        return f"抱歉，AI暂时未能找到以 '{last_char}' 开头的诗句。"
+                    else: return f"抱歉，AI暂时未能找到以 '{last_char}' 或其同音字开头的诗句。"
 
                 if is_line_in_db(ai_line_cleaned, db):
                     logger.info(f"AI response line '{ai_line_cleaned}' FOUND in DB. Returning.")
@@ -247,24 +319,74 @@ def get_ai_response_to_line(user_line: str, db: Session) -> Optional[str]:
                 else:
                     logger.warning(f"AI response line '{ai_line_cleaned}' NOT found in DB.")
                     if attempt < MAX_RETRIES:
-                        current_prompt = base_prompt + f"\\n（这句 '{ai_line_cleaned}' 很有趣，但在我的常见诗词库中未能确认。能否换一个以 '{last_char}' 开头的、更广为人知或明确有出处的5-7字纯诗句呢？）"
+                        payload["messages"].append({"role": "assistant", "content": ai_line_raw})
+                        payload["messages"].append({"role": "user", "content": f"这句 '{ai_line_cleaned}' 很有趣，但在我的常见诗词库中未能确认。能否换一个以 '{last_char}' 或其同音字开头的、更广为人知或明确有出处的5-7字纯诗句呢？"})
+                        current_prompt_text = payload["messages"][-1]["content"]
                         continue
                     else: 
                         logger.error(f"AI response line '{ai_line_cleaned}' not in DB after all retries.")
-                        return None
+                        # 如果多次尝试AI都给不在库中的，可以考虑返回ai_line_cleaned，即使它不在库中，并标记
+                        return f"AI给出了诗句'{ai_line_cleaned}'，但它不在我们的常用诗词库中。您觉得算接上了吗？（可选择返回此句或判AI失败）" # 这是一个需要产品层面决定的点
             else:
-                logger.warning("LLM did not return valid content for AI response (choices empty or message content missing).")
+                logger.warning(f"LLM did not return valid content structure for AI response. Response: {str(result)[:200]}")
                 if attempt < MAX_RETRIES:
-                    current_prompt = base_prompt + f"\\n（返回内容似乎是空的。请给出一个以'{last_char}'开头的5-7字纯诗句。）" # 使用f-string并用单引号包裹变量
+                    payload["messages"].append({"role": "assistant", "content": result.get('choices')[0].get('message').get('content') if result.get('choices') and result['choices'][0].get('message') else "Empty response"})
+                    payload["messages"].append({"role": "user", "content": f"返回内容似乎是空的或格式不对。请给出一个以'{last_char}'或其同音字开头的5-7字纯诗句。"})
+                    current_prompt_text = payload["messages"][-1]["content"]
                     continue
-                else: 
-                    return "抱歉，AI大模型未能生成诗句来接龙。"
+                else: return "抱歉，AI大模型未能生成诗句来接龙。"
 
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout during DeepSeek call for AI response (Attempt {attempt + 1}) after 15s.", exc_info=True)
+            if attempt == MAX_RETRIES:
+                return "抱歉，连接AI服务超时，请稍后再试。"
+        except requests.exceptions.RequestException as e:
+            logger.error(f"RequestException during DeepSeek call for AI response (Attempt {attempt + 1}): {type(e).__name__} - {str(e)}", exc_info=True)
+            if attempt == MAX_RETRIES:
+                return "抱歉，连接AI服务时发生网络错误。"
         except Exception as e:
-            logger.error(f"Exception during LLM call or processing for AI response (Attempt {attempt + 1}): {e}", exc_info=True)
+            logger.error(f"Generic exception during DeepSeek call for AI response (Attempt {attempt + 1}): {type(e).__name__} - {str(e)}", exc_info=True)
             if attempt == MAX_RETRIES:
                 return "抱歉，AI大模型服务在接龙时出现问题。"
 
-    logger.error(f"Exhausted all attempts to get a valid AI response for '{cleaned_user_line}' (sync). Returning None.")
-    return None
+    logger.error(f"Exhausted all attempts to get a valid AI response for '{cleaned_user_line}' (requests). Returning None.")
+    return f"抱歉，AI多次尝试后仍未能为'{cleaned_user_line}'接上合适的诗句。"
+
+async def judge_user_line_by_ai(ai_previous_line: str, user_current_line_raw: str, db: Session) -> tuple[bool, str]:
+    """
+    AI 判断用户当前的接龙诗句是否有效。
+    主要基于首字规则（同音或同字）和数据库校验。
+    返回一个元组 (is_correct: bool, message: str)
+    """
+    logger.info(f"!!!!!!!!!!!! judge_user_line_by_ai CALLED (Homophone Rule) !!!!!!!!!!!! AI_Prev: '{ai_previous_line}', User_Raw: '{user_current_line_raw}'")
+    
+    cleaned_user_line = _clean_line(user_current_line_raw)
+    cleaned_ai_previous_line = _clean_line(ai_previous_line)
+
+    if not cleaned_user_line:
+        logger.warning(f"User line '{user_current_line_raw}' cleaned to empty.")
+        return False, "您的回答似乎是空的或无效的，请输入一句诗词。"
+
+    if not cleaned_ai_previous_line:
+        logger.error(f"Critical: AI's previous line '{ai_previous_line}' cleaned to empty. This should not happen.")
+        return False, "系统内部错误：AI的上一句诗词记录无效，无法判断您的回答。"
+
+    # 1. 基本规则校验：首字是否接上（同字或同音字）
+    expected_char_for_next_line = cleaned_ai_previous_line[-1]
+    actual_first_char_of_user_line = cleaned_user_line[0]
+    
+    # 使用新的同音字判断逻辑
+    if not are_chars_homophones_or_same(actual_first_char_of_user_line, expected_char_for_next_line):
+        pinyins_expected = get_lazy_pinyin_set(expected_char_for_next_line)
+        pinyin_hint_expected = f"(读音参考: {next(iter(pinyins_expected)) if pinyins_expected else '未知'})"
+        logger.info(f"User line first char '{actual_first_char_of_user_line}' does not match AI prev last char '{expected_char_for_next_line}' or its homophones.")
+        return False, f"首字不对哦！应该是以'{expected_char_for_next_line}'{pinyin_hint_expected}或其同音字开头的诗句，但您的是以'{actual_first_char_of_user_line}'开头。"
+
+    # 2. 数据库校验：用户回答的诗句是否在库中
+    if not is_line_in_db(cleaned_user_line, db):
+        logger.info(f"User line '{cleaned_user_line}' NOT found in DB.")
+        return False, f"您回答的诗句'{cleaned_user_line}'很有意境，但在我的诗词库中未能查证到呢。"
+        
+    logger.info(f"User line '{cleaned_user_line}' passed all checks (first char homophone/same & DB).")
+    return True, "接得漂亮！"
 

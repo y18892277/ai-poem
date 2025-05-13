@@ -3,7 +3,7 @@ import axios from 'axios';
 // 创建axios实例
 const api = axios.create({
   baseURL: 'http://localhost:8000/api/v1/poetry',
-  timeout: 5000,
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json'
   }

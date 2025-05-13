@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     # API配置
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "诗词接龙游戏"
+    LLM_API_KEY: Optional[str] = None # 保留原有的，以防万一需要切换
+    DEEPSEEK_API_KEY: Optional[str] = None
     
     # MySQL 配置
     MYSQL_HOST: str = "localhost"
