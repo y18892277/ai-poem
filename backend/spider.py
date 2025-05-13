@@ -1,35 +1,38 @@
 import re
 import requests
 from bs4 import BeautifulSoup
-import json # For JSON Lines output
+import json
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED
-import time # For potential delays
-import os # Import os module
+import time
+import os
 from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry # Corrected import for Retry
+from urllib3.util.retry import Retry
 
-# 爬取的诗歌网址 (可以保持不变或按需调整)
-urls = [
-    'https://so.gushiwen.org/gushi/tangshi.aspx',
-    'https://so.gushiwen.org/gushi/sanbai.aspx',
-    'https://so.gushiwen.org/gushi/songsan.aspx',
-    'https://so.gushiwen.org/gushi/songci.aspx'
-]
+# 数据库相关导入
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session as DbSession # 使用别名以防冲突
+# 假设 Poetry 模型和 Base 在 app.models 和 app.core.database
+# 如果 spider.py 从项目根目录执行 (python backend/spider.py)
+from app.models import Poetry 
+from app.core.database import Base as AppBase # 如果需要创建表 (通常不需要，主应用会做)
+from app.core.config import settings
 
-poem_links = []
+# 新的目标网站
+BASE_URL = 'https://gushici.china.com'
+START_URL = f'{BASE_URL}/shici/'
+
 headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 '
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/5.37.36 '
                   '(KHTML, like Gecko) Chrome/67.0.3396.87 Safari/537.36',
-    'Referer': 'https://so.gushiwen.org' # Adding a referer might be polite
+    'Referer': BASE_URL
 }
 
-print("Fetching poem links...")
+print("Initializing spider for gushici.china.com...")
 
-# Function to create a session with retry logic
 def requests_retry_session(
-    retries=5, # Increased retries
-    backoff_factor=2, # Increased backoff_factor for more significant exponential delay
-    status_forcelist=(500, 502, 503, 504, 408), # Added 408 Request Timeout
+    retries=5,
+    backoff_factor=2,
+    status_forcelist=(500, 502, 503, 504, 408),
     session=None,
 ):
     session = session or requests.Session()
@@ -39,174 +42,265 @@ def requests_retry_session(
         connect=retries,
         backoff_factor=backoff_factor,
         status_forcelist=status_forcelist,
-        allowed_methods=frozenset(['GET', 'POST']) # Allow retries for POST if needed in future
+        allowed_methods=frozenset(['GET', 'POST'])
     )
     adapter = HTTPAdapter(max_retries=retry)
     session.mount('http://', adapter)
     session.mount('https://', adapter)
     return session
 
-# 获取所有诗歌链接
-for url_category in urls:
+# 用于临时存储从一页爬取到的诗歌字典列表
+page_poems_data = []
+
+
+def save_poem_to_db(db: DbSession, poem_data: dict):
+    """将单首诗歌数据保存到数据库，并检查重复。"""
     try:
-        # Use session for retries, increase timeout
-        session = requests_retry_session()
-        req = session.get(url_category, headers=headers, timeout=30) # Increased timeout
-        req.raise_for_status() # Check for HTTP errors
-        soup = BeautifulSoup(req.text, "lxml")
-        # Sons div contains links to individual poems or further sub-categories
-        sons_divs = soup.find_all('div', class_="sons")
-        for sons_div in sons_divs:
-            links = sons_div.find_all('a')
-            for link in links:
-                href = link.get('href')
-                # Ensure it's a direct poem link
-                if href and (href.startswith('/shiwenv_') or href.startswith('https://so.gushiwen.cn/shiwenv_')):
-                    if href.startswith('/'):
-                        poem_links.append('https://so.gushiwen.org' + href)
-                    else:
-                        poem_links.append(href)
-        # time.sleep(0.5) # Removed, retry backoff will handle delays
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching category page {url_category}: {e}")
+        existing_poem = db.query(Poetry).filter_by(title=poem_data['title'], author=poem_data['author']).first()
+        if existing_poem:
+            print(f"  Poem '{poem_data['title']}' by {poem_data['author']} already exists in DB. Skipping.")
+            return False
+        
+        new_poem = Poetry(
+            title=poem_data['title'],
+            author=poem_data['author'],
+            dynasty=poem_data['dynasty'],
+            content=poem_data['content'],
+            type=poem_data.get('type', '诗'),
+            tags=poem_data.get('tags'), # 目前为 None
+            difficulty=poem_data.get('difficulty', 1) # 默认
+        )
+        db.add(new_poem)
+        # db.commit() # 单独提交可能效率低，改为批量提交
+        print(f"  Added to DB session: {poem_data.get('title')}")
+        return True
     except Exception as e:
-        print(f"An unexpected error occurred with {url_category}: {e}")
+        print(f"Error saving poem '{poem_data.get('title')}' to DB session: {e}")
+        # db.rollback() # 如果是单独提交，则需要回滚
+        return False
 
+# 主爬取逻辑
+def crawl_poems(page_url: str, db: DbSession): # 接收db会话
+    global page_poems_data # 使用全局列表来收集当前页面的数据，稍后批量处理
+    page_poems_data = [] # 清空上一页的数据
 
-poem_links = list(set(poem_links)) # Remove duplicates
-print(f"Found {len(poem_links)} unique poem links.")
-
-# This list will store dictionaries, each representing a poem
-structured_poem_list = []
-
-# 爬取单首诗歌内容的函数
-def get_poem_details(url):
-    poem_data = {} # Initialize poem_data at the beginning of the function
+    print(f"Fetching poems from: {page_url}")
     try:
-        # print(f"Fetching details for: {url}")
         session = requests_retry_session()
-        req = session.get(url, headers=headers, timeout=30) # Increased timeout and use session
+        req = session.get(page_url, headers=headers, timeout=30)
         req.raise_for_status()
         soup = BeautifulSoup(req.text, "lxml")
+        
+        poem_titles_h3 = soup.find_all('h3')
+        if not poem_titles_h3:
+            print("Could not find any poem title (h3 tags) on the page.")
+            return 0
 
-        # 1. 提取标题 (title)
-        title_tag = soup.find('h1')
-        poem_data['title'] = title_tag.get_text(strip=True) if title_tag else "未知标题"
+        print(f"Found {len(poem_titles_h3)} potential poem entries (h3 tags) on the page.")
+        
+        parsed_count = 0
+        for h3_tag in poem_titles_h3:
+            poem_item_data = {}
+            
+            # 1. 标题
+            title_a_tag = h3_tag.find('a')
+            title_text = title_a_tag.get_text(strip=True) if title_a_tag else h3_tag.get_text(strip=True)
+            if not title_text:
+                # print("  Skipping h3 tag with no title text.")
+                continue
+            poem_item_data['title'] = title_text
 
-        # 2. 提取作者 (author) 和朝代 (dynasty)
-        source_tag = soup.find('p', class_='source')
-        author = "未知作者"
-        dynasty = "未知朝代"
-        if source_tag:
-            author_links = source_tag.find_all('a')
-            if len(author_links) > 0:
-                author = author_links[0].get_text(strip=True)
-            # Try to find dynasty more robustly
-            span_tag = source_tag.find('span')
-            if span_tag:
-                dynasty_text_in_span = span_tag.get_text(strip=True)
-                match_dynasty = re.search(r'〔(.*?)〕', dynasty_text_in_span)
-                if match_dynasty:
-                    dynasty = match_dynasty.group(1)
-                elif len(author_links) > 1 and author_links[-1].get_text(strip=True) != author:
-                    # Fallback if span method fails but there are multiple links
-                    dynasty_candidate_text = author_links[-1].get_text(strip=True)
-                    if len(dynasty_candidate_text) < 5 and ('代' in dynasty_candidate_text or len(dynasty_candidate_text) <=2 ) : # simple check for dynasty like string
-                         dynasty = dynasty_candidate_text
+            # 2. 作者与朝代
+            author_dynasty_text_node_content = ""
+            current_node = h3_tag.next_sibling
+            processed_author_node = None 
+            print(f"\n--- Processing H3: {title_text[:30]}...") # DEBUG
 
-        poem_data['author'] = author
-        poem_data['dynasty'] = dynasty.replace('代', '') # "唐代" -> "唐"
+            while current_node:
+                if hasattr(current_node, 'name') and current_node.name: 
+                    current_tag_name = current_node.name
+                    current_tag_classes = current_node.get('class', []) if hasattr(current_node, 'attrs') else []
+                    
+                    if current_tag_name == 'h3' and current_node != h3_tag: 
+                        break
 
-        # 3. 提取内容 (content)
-        content_div = soup.find('div', class_='contson')
-        content_text = ""
-        if content_div:
-            for span_tooltip in content_div.find_all('span', style=lambda value: value and 'display:none' in value):
-                span_tooltip.decompose()
+                    # Check for author info within specific tags
+                    if (current_tag_name == 'p' and 'item_txt' in current_tag_classes) or \
+                       (current_tag_name == 'div' and any(cls in current_tag_classes for cls in ['item_info', 'side_focus_name'])):
+                        candidate_text = current_node.get_text(strip=True)
+                        print(f"    Text from '{current_tag_name}.{'.'.join(current_tag_classes) if current_tag_classes else ''}': '{candidate_text}'") # DEBUG
+                        if '·' in candidate_text: 
+                            author_dynasty_text_node_content = candidate_text
+                            processed_author_node = current_node 
+                            print(f"    Found Author/Dynasty Candidate in Tag '{current_tag_name}.{'.'.join(current_tag_classes)}': '{author_dynasty_text_node_content}'") # DEBUG
+                            break
+                    elif current_tag_name == 'span': # Handle <span>-作者·朝代</span>
+                        candidate_text = current_node.get_text(strip=True)
+                        print(f"    Text from 'span': '{candidate_text}'") # DEBUG
+                        if candidate_text.startswith('-'):
+                            candidate_text = candidate_text[1:].strip()
+                        if '·' in candidate_text:
+                            author_dynasty_text_node_content = candidate_text
+                            processed_author_node = current_node
+                            print(f"    Found Author/Dynasty Candidate in Tag 'span': '{author_dynasty_text_node_content}'") # DEBUG
+                            break
+                elif isinstance(current_node, str): 
+                    stripped_text = current_node.strip()
+                    if stripped_text:
+                        if '·' in stripped_text and not author_dynasty_text_node_content: # Only use text node if no tagged version found yet
+                            author_dynasty_text_node_content = stripped_text
+                            processed_author_node = current_node # Though this is a text node, we mark its position
+                            print(f"    Found Author/Dynasty Candidate in Text Node: '{author_dynasty_text_node_content}'") # DEBUG
+                            break
+                
+                if hasattr(current_node, 'name') and current_node.name == 'div' and \
+                    any(c in current_node.get('class', []) for c in ['content', 'contson', 'item_content', 'item_info', 'side_focus_txt']): # Added item_info, side_focus_txt
+                    # If we hit a content div while still looking for author, it means author was likely missed or structured differently
+                    # print("    Hit a potential content div while searching for author, stopping author search.") # DEBUG
+                    break
 
-            paragraphs = content_div.find_all('p')
-            if paragraphs:
-                lines_from_p = []
-                for p_tag in paragraphs:
-                    p_text = ' '.join(p_tag.get_text(separator='\n', strip=True).split())
-                    lines_from_p.append(p_text)
-                content_text = '\n'.join(lines_from_p)
+                current_node = current_node.next_sibling
+            
+            author = "未知作者"
+            dynasty = "未知朝代"
+            if author_dynasty_text_node_content:
+                if '·' in author_dynasty_text_node_content:
+                    parts = author_dynasty_text_node_content.split('·', 1)
+                    author = parts[0].strip()
+                    dynasty = parts[1].strip().replace('[','').replace(']','') # Clean brackets from dynasty
+                else: 
+                    author = author_dynasty_text_node_content.strip().replace('[','').replace(']','') # Handle cases where only author or dynasty might be there and clean
+            
+            poem_item_data['author'] = author
+            poem_item_data['dynasty'] = dynasty
+            print(f"    Parsed Author: '{author}', Dynasty: '{dynasty}'") # DEBUG
+
+            # 3. 内容
+            content_text = ""
+            content_div_found = None
+            # Start searching for content AFTER the h3 tag OR after the processed_author_node if one was found
+            start_search_for_content_node = processed_author_node if processed_author_node else h3_tag
+            print(f"    Starting content search after node: {type(start_search_for_content_node)}, tag: {getattr(start_search_for_content_node, 'name', 'N/A')}, text hint: '{start_search_for_content_node.get_text(strip=True)[:30]}...'") # DEBUG
+            
+            current_sibling_for_content = start_search_for_content_node.next_sibling
+            while current_sibling_for_content:
+                print(f"    Content search - current sibling: type={type(current_sibling_for_content)}, name='{getattr(current_sibling_for_content, 'name', 'N/A')}', classes={getattr(current_sibling_for_content, 'attrs', {}).get('class', 'N/A')}, text(short)='{str(current_sibling_for_content)[:50].strip() if isinstance(current_sibling_for_content, str) else (getattr(current_sibling_for_content, 'get_text', lambda strip: '')(strip=True)[:30] + '...' if hasattr(current_sibling_for_content, 'name') else '') }'") # DEBUG
+                if hasattr(current_sibling_for_content, 'name') and current_sibling_for_content.name == 'div':
+                    # Check for 'item_info', 'side_focus_txt', or fallback 'content'/'contson'
+                    current_classes = current_sibling_for_content.get('class', [])
+                    if any(cls in current_classes for cls in ['item_info', 'side_focus_txt', 'content', 'contson']):
+                        content_div_found = current_sibling_for_content
+                        print(f"      Found POTENTIAL content div with classes: {current_classes}!") # DEBUG
+                        break
+                if hasattr(current_sibling_for_content, 'name') and current_sibling_for_content.name == 'h3': # Stop if we hit the next poem's title
+                    print("      Hit next H3, stopping content search for current poem.") # DEBUG
+                    break
+                current_sibling_for_content = current_sibling_for_content.next_sibling
+
+            if content_div_found:
+                for br_tag in content_div_found.find_all("br"):
+                    br_tag.replace_with("\\n")
+                raw_content = content_div_found.get_text(separator=' ', strip=True)
+                content_text = raw_content.replace("\\n", "\n").strip()
+                content_text = re.sub(r'\\（.*?\\）', '', content_text)
+                content_text = re.sub(r'\\(.*?\\)', '', content_text)
+                content_text = re.sub(r'\\[.*?\\]', '', content_text)
+                content_text = content_text.replace('!', '！').replace('?', '？')
+            print(f"    Parsed Content (first 50 chars after cleaning): '{content_text[:50]}...'") # DEBUG
+            
+            poem_item_data['content'] = content_text if content_text else "无内容"
+            
+            poem_item_data['type'] = "诗"
+            poem_item_data['tags'] = None
+            poem_item_data['difficulty'] = 1
+
+            # 更详细的判断和打印
+            title_ok = poem_item_data.get('title') != "未知标题" and bool(poem_item_data.get('title'))
+            # 作者信息可以为"未知作者"，但不能是空字符串，如果网站上就没有作者，那也接受
+            author_ok = bool(poem_item_data.get('author')) # 允许"未知作者"但不能为空
+            content_ok = poem_item_data.get('content') != "无内容" and bool(poem_item_data.get('content'))
+
+            # print(f"    Checks: Title OK? {title_ok}, Author OK? {author_ok} ('{poem_item_data.get('author')}'), Content OK? {content_ok}") # DEBUG
+
+            if title_ok and author_ok and content_ok:
+                if save_poem_to_db(db, poem_item_data):
+                    parsed_count += 1
+                    print(f"  Successfully parsed & added to DB session: {poem_item_data.get('title')} by {poem_item_data.get('author')}") # 更明确的成功信息
             else:
-                content_text = content_div.get_text(separator='\n', strip=True)
-                content_text = '\n'.join([line.strip() for line in content_text.splitlines() if line.strip()])
-
-            content_text = re.sub(r'\（.*?\）', '', content_text)
-            content_text = re.sub(r'\(.*?\)', '', content_text)
-            content_text = re.sub(r'\[.*?\]', '', content_text)
-            content_text = content_text.replace('!', '！').replace('?', '？')
-
-        poem_data['content'] = content_text if content_text else "无内容"
-
-        # 4. 提取类型 (type) 和标签 (tags)
-        tags_div = soup.find('div', class_='tag')
-        tags_list = []
-        poem_type = "诗"
+                print(f"  Skipped entry: Title='{poem_item_data.get('title')}', Author='{poem_item_data.get('author')}', Content isempty= {not content_ok}")
+                if not title_ok: print("    Reason: Title missing or invalid.")
+                if not author_ok: print("    Reason: Author missing.") # "未知作者" 是可接受的，但完全没有提取到author (empty string)不行
+                if not content_ok: print("    Reason: Content missing or invalid.")
+            
         
-        if tags_div:
-            tag_links = tags_div.find_all('a')
-            for tag_link in tag_links:
-                tag_text = tag_link.get_text(strip=True)
-                if tag_text.endswith('词') and len(tag_text) < 5:
-                    poem_type = tag_text
-                elif tag_text.endswith('曲') and len(tag_text) < 5:
-                     poem_type = tag_text
-                elif tag_text == "古诗" or tag_text == "诗歌":
-                    poem_type = "诗"
-                elif tag_text not in ["赏析", "译文", "翻译", "注释", "字词", "背景", "名句", "创作背景", "作者介绍"]:
-                    if len(tag_text) < 10:
-                        tags_list.append(tag_text)
-        
-        if poem_data.get('title'): # Use .get for safety
-            title_val = poem_data['title']
-            if "·" in title_val or "（" in title_val or title_val.endswith("令") or title_val.endswith("慢") or title_val.endswith("子"):
-                 if poem_type == "诗": poem_type = "词"
-            if title_val.endswith("赋"):
-                 if poem_type == "诗": poem_type = "赋"
-
-        poem_data['type'] = poem_type
-        poem_data['tags'] = ','.join(list(set(tags_list))) if tags_list else None
-        poem_data['difficulty'] = 1
-
-        structured_poem_list.append(poem_data)
-        time.sleep(0.25) # Add a small delay after each successful fetch
+        print(f"Finished parsing page. Successfully parsed and attempted to add {parsed_count} poems to DB session.")
+        return parsed_count
 
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching {url}: {e}")
+        print(f"Error fetching page {page_url}: {e}")
+        return 0
     except Exception as e:
-        print(f"An error occurred processing {url}: {e}\nExtracted data so far: {poem_data}")
+        print(f"An unexpected error occurred with {page_url}: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
 
-
-print(f"\nStarting to fetch details for {len(poem_links)} poems...")
-executor = ThreadPoolExecutor(max_workers=2) # Further reduced max_workers
-future_tasks = [executor.submit(get_poem_details, url) for url in poem_links]
-wait(future_tasks, return_when=ALL_COMPLETED)
-
-print(f"\nFetched details for {len(structured_poem_list)} poems.")
-
-# Define output directory and filename within the project structure
-# Assuming spider.py is in backend/, so backend/data/poems_structured.jsonl
-output_dir = os.path.join(os.path.dirname(__file__), 'data') # Gets a 'data' subdir relative to this script
-output_filename = os.path.join(output_dir, 'poems_structured.jsonl')
-
-# Create output directory if it doesn't exist
-if not os.path.exists(output_dir):
+# --- 主程序执行 ---
+if __name__ == "__main__":
+    # 设置数据库连接
+    engine = create_engine(settings.get_database_url)
+    # AppBase.metadata.create_all(bind=engine) # 确保表已创建, 通常在主应用启动时执行一次即可
+    
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    db: DbSession = SessionLocal()
+    
+    total_poems_added_to_session = 0
+    max_pages_to_crawl = 200
+    start_page = 1 # 可以从指定页码开始，默认为1
+    consecutive_empty_pages_limit = 15 # 连续多少个空页面后停止
+    empty_page_streak = 0 # 当前连续空页面的计数
+    
     try:
-        os.makedirs(output_dir)
-        print(f"Created output directory: {output_dir}")
-    except OSError as e:
-        print(f"Error creating directory {output_dir}: {e}")
-        # Fallback to current directory if unable to create data subdir
-        output_filename = 'poems_structured.jsonl' 
-        print(f"Will attempt to write to current directory: {os.getcwd()}")
+        for page_num in range(start_page, start_page + max_pages_to_crawl):
+            # 使用新的URL分页格式: https://gushici.china.com/shici/0_0_0_PAGE.html
+            current_url = f"{BASE_URL}/shici/0_0_0_{page_num}.html"
+            
+            print(f"\n--- Processing Page {page_num} ({current_url}) ---")
+            
+            parsed_on_page = crawl_poems(current_url, db) # Pass db session
+            total_poems_added_to_session += parsed_on_page
+            
+            if parsed_on_page == 0:
+                empty_page_streak += 1
+                print(f"No new poems found or added from page {page_num}. Consecutive empty pages: {empty_page_streak}")
+                if empty_page_streak >= consecutive_empty_pages_limit:
+                    print(f"Reached {consecutive_empty_pages_limit} consecutive empty pages. Stopping pagination.")
+                    break # 达到连续空页面上限，停止
+            else:
+                empty_page_streak = 0 # 重置连续空页面计数
+            
+            # Delay only if we are continuing to the next page and it's not the last one in the current batch
+            if page_num < (start_page + max_pages_to_crawl - 1) and empty_page_streak < consecutive_empty_pages_limit:
+                print(f"Waiting for 2 seconds before fetching next page...")
+                time.sleep(2) # 尊重服务器, 避免请求过于频繁
 
-print(f"Writing poems to {output_filename}...")
-with open(output_filename, 'w', encoding='utf-8') as f:
-    for poem_data_item in structured_poem_list:
-        f.write(json.dumps(poem_data_item, ensure_ascii=False) + '\n')
+        if total_poems_added_to_session > 0:
+            db.commit() # 提交所有事务
+            print(f"\nSuccessfully committed {total_poems_added_to_session} new poems to the database from {max_pages_to_crawl} pages (or fewer if pagination ended early).")
+        else:
+            print(f"\nNo new poems were added to the database session to commit after attempting to crawl {max_pages_to_crawl} pages.")
 
-print(f"Successfully wrote {len(structured_poem_list)} poems to {output_filename}")
+    except Exception as e:
+        print(f"An error occurred during the crawl or DB commit process: {e}")
+        db.rollback() # 回滚所有未提交的更改
+        import traceback
+        traceback.print_exc()
+    finally:
+        db.close()
+        print("Database session closed.")
+
+    # 移除旧的 JSON Lines 文件写入逻辑
+    # print(f"\nFetched details for {len(all_poems_data)} poems from the first page.")
+    # output_dir = os.path.join(os.path.dirname(__file__), 'data')
+    # output_filename = os.path.join(output_dir, 'poems_china_com.jsonl')
+    # ... (文件写入代码)
